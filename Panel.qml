@@ -1,5 +1,4 @@
 import QtQuick
-import Quickshell.Io
 import qs.Commons
 import qs.Ui
 
@@ -14,8 +13,11 @@ Panel {
   id: root
 
   moduleName: "tmn73.jira"
+  // The base Panel registers open, close, show, hide and toggle on this target
+  // by itself. Declaring a second IpcHandler here would shadow it and log a
+  // duplicate registration warning, so the widget only takes ipc over when it
+  // has something of its own to expose.
   ipcTarget: "tmn73.jira"
-  manageIpc: false
 
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
@@ -26,16 +28,6 @@ Panel {
   onOpenedChanged: {
     if (opened)
       Qt.callLater(function() { keyCatcher.forceActiveFocus() })
-  }
-
-  IpcHandler {
-    target: root.ipcTarget
-
-    function open(): void { root.open() }
-    function close(): void { root.close() }
-    function show(): void { root.open() }
-    function hide(): void { root.close() }
-    function toggle(): void { root.toggle() }
   }
 
   BarIconButton {
