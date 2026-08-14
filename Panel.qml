@@ -29,6 +29,14 @@ Panel {
 
   readonly property var followedProjects: jira.followedProjects
 
+  // Recomputed on the clock as well as on new data, so the time bar keeps
+  // creeping forward on a panel left open.
+  property int sprintTick: 0
+  readonly property var sprintBars: {
+    sprintTick
+    return Model.sprintBars(jira.sprint, jira.sprintBarChoice, Date.now(), jira.doneStatuses)
+  }
+
   // Writes one widget setting back to shell.json.
   //
   // The value is applied locally first so the panel reacts on the click, and
@@ -51,6 +59,39 @@ Panel {
     for (var i = 0; i < jira.projects.length; i++)
       keys.push(String(jira.projects[i].key || ""))
     return keys
+  }
+
+  // The first click has to start from what is drawn, which is Jira's own idea
+  // of done, otherwise ticking one status would silently unmark all the others.
+  function toggleDoneStatus(name) {
+    var current = jira.doneStatuses.slice()
+    if (current.length === 0)
+      current = Model.defaultDoneStatuses(jira.sprint)
+
+    var lowered = name.toLowerCase()
+    var next = []
+    var found = false
+    for (var i = 0; i < current.length; i++) {
+      if (String(current[i]).toLowerCase() === lowered)
+        found = true
+      else
+        next.push(current[i])
+    }
+    if (!found)
+      next.push(name)
+
+    setSetting("doneStatuses", next)
+  }
+
+  function toggleSprintBar(id) {
+    var chosen = jira.sprintBarChoice.slice()
+    var at = chosen.indexOf(id.toUpperCase())
+    if (at === -1)
+      chosen.push(id)
+    else
+      chosen.splice(at, 1)
+    setSetting("sprintBars", chosen)
+    jira.refresh()
   }
 
   function toggleProject(key) {
@@ -201,6 +242,13 @@ Panel {
   }
 
   Timer {
+    interval: 60000
+    repeat: true
+    running: root.opened
+    onTriggered: root.sprintTick++
+  }
+
+  Timer {
     id: confirmationTimer
 
     interval: 1500
@@ -339,6 +387,16 @@ Panel {
             }
           }
 
+          SprintBars {
+            width: parent.width
+            visible: !root.showSettings
+            sprint: jira.sprint
+            bars: root.sprintBars
+            sprintState: jira.sprintState
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+          }
+
           JiraSearchField {
             id: searchField
 
@@ -431,7 +489,14 @@ Panel {
             state: jira.state
             foreground: root.foreground
             fontFamily: root.fontFamily
+            sprint: jira.sprint
+            sprintState: jira.sprintState
+            sprintBars: jira.sprintBarChoice
+            estimateCoverage: Model.estimateCoverage(jira.sprint)
+            doneStatuses: jira.doneStatuses.length > 0 ? jira.doneStatuses : Model.defaultDoneStatuses(jira.sprint)
             onProjectToggled: function (key) { root.toggleProject(key) }
+            onSprintBarToggled: function (id) { root.toggleSprintBar(id) }
+            onDoneStatusToggled: function (name) { root.toggleDoneStatus(name) }
             onAllProjectsCleared: {
               root.setSetting("followedProjects", [])
               jira.refresh()

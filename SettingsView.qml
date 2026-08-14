@@ -22,12 +22,32 @@ Column {
   property string account: ""
   property string state: "ok"
 
+  property var sprint: null
+  property string sprintState: "off"
+  property var sprintBars: []
+  property string estimateCoverage: ""
+  property var doneStatuses: []
+
   signal projectToggled(string key)
   signal allProjectsCleared()
+  signal sprintBarToggled(string id)
+  signal doneStatusToggled(string name)
 
   readonly property color muted: Qt.darker(foreground, 1.5)
   readonly property color faint: Qt.darker(foreground, 1.9)
   readonly property bool followingAll: !followedProjects || followedProjects.length === 0
+
+  function countsAsDone(name) {
+    for (var i = 0; i < doneStatuses.length; i++) {
+      if (String(doneStatuses[i]).toLowerCase() === String(name).toLowerCase())
+        return true
+    }
+    return false
+  }
+
+  function showsBar(id) {
+    return sprintBars.indexOf(id.toUpperCase()) !== -1
+  }
 
   function isFollowed(key) {
     if (followingAll)
@@ -155,6 +175,101 @@ Column {
     hint: qsTr("Clears the selection above")
     checked: false
     onActivated: root.allProjectsCleared()
+  }
+
+  // ---- Sprint
+
+  SectionTitle { text: qsTr("SPRINT") }
+
+  Text {
+    width: parent.width
+    text: qsTr("Which progress bars to show above your tickets. Untick them all to turn the section off and stop asking Jira for it.")
+    color: root.faint
+    font.family: root.fontFamily
+    font.pixelSize: Style.font.caption
+    wrapMode: Text.WordWrap
+  }
+
+  ToggleRow {
+    label: qsTr("Time")
+    hint: qsTr("How much of the sprint has elapsed")
+    checked: root.showsBar("time")
+    onActivated: root.sprintBarToggled("time")
+  }
+
+  ToggleRow {
+    label: qsTr("Tickets")
+    hint: qsTr("Tickets finished out of the whole sprint")
+    checked: root.showsBar("tickets")
+    onActivated: root.sprintBarToggled("tickets")
+  }
+
+  ToggleRow {
+    label: qsTr("Story points")
+    // The coverage is the point of showing it here: counting points is
+    // misleading on a sprint where most tickets carry no estimate, and this is
+    // where someone decides whether to trust that bar.
+    hint: root.estimateCoverage !== "" ? root.estimateCoverage : qsTr("Points finished out of the whole sprint")
+    checked: root.showsBar("points")
+    onActivated: root.sprintBarToggled("points")
+  }
+
+  Text {
+    width: parent.width
+    visible: root.sprintBars.length > 0
+    color: root.faint
+    font.family: root.fontFamily
+    font.pixelSize: Style.font.caption
+    wrapMode: Text.WordWrap
+    text: {
+      if (root.sprintState === "no-project")
+        return qsTr("Pick a project above to choose which board's sprint is shown.")
+      if (root.sprintState === "none")
+        return qsTr("That board has no sprint running.")
+      if (root.sprintState === "no-board")
+        return qsTr("That project has no board.")
+      if (root.sprintState === "derived")
+        return qsTr("Read from your tickets, because this token cannot read boards. A sprint holding no ticket stays hidden. Add the Jira Software scopes to your API token to read it directly.")
+      if (root.sprintState === "partial")
+        return qsTr("The sprint was found but its contents could not be counted.")
+      if (root.sprintState === "unavailable")
+        return qsTr("Jira did not answer for the sprint.")
+      return ""
+    }
+  }
+
+  // ---- What counts as finished
+  //
+  // Jira's own categories are only a starting point. A team that calls
+  // "Ready to Merge" finished is right about its own board, and a progress bar
+  // that disagrees with the people reading it is worse than no bar at all.
+
+  SectionTitle {
+    text: qsTr("COUNTS AS DONE")
+    visible: root.sprint !== null && root.sprintBars.length > 0
+  }
+
+  Text {
+    width: parent.width
+    visible: root.sprint !== null && root.sprintBars.length > 0
+    text: qsTr("The statuses in this sprint. Tick the ones your team treats as finished.")
+    color: root.faint
+    font.family: root.fontFamily
+    font.pixelSize: Style.font.caption
+    wrapMode: Text.WordWrap
+  }
+
+  Repeater {
+    model: (root.sprint !== null && root.sprintBars.length > 0) ? (root.sprint.statuses || []) : []
+
+    ToggleRow {
+      required property var modelData
+
+      label: String(modelData.name || "")
+      hint: modelData.count + (modelData.count === 1 ? qsTr(" ticket") : qsTr(" tickets"))
+      checked: root.countsAsDone(String(modelData.name || ""))
+      onActivated: root.doneStatusToggled(String(modelData.name || ""))
+    }
   }
 
   // ---- Connection. Read-only on purpose: changing the account means typing a

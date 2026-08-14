@@ -23,6 +23,8 @@ Item {
   property string fetchedAt: ""
   property var tickets: []
   property var projects: []
+  property var sprint: null
+  property string sprintState: "off"
 
   property var searchResults: []
   property string searchQuery: ""
@@ -77,11 +79,26 @@ Item {
   // settings pane ended up drawing a selection the fetch had already moved past.
   readonly property var followedProjects: Model.projectList(setting("followedProjects", []))
 
+  // Which sprint bars to draw. Empty means the section is off entirely, and the
+  // helper is then never asked for a sprint, so teams that do not run sprints
+  // pay nothing for the feature.
+  readonly property var sprintBarChoice: Model.projectList(setting("sprintBars", ["time", "tickets"]))
+  readonly property bool wantSprint: sprintBarChoice.length > 0
+
+  // Which statuses this team calls finished. Empty means "whatever Jira calls
+  // done", which is the only sensible default before anyone has looked.
+  readonly property var doneStatuses: {
+    var stored = setting("doneStatuses", [])
+    return Array.isArray(stored) ? stored : Model.projectList(stored)
+  }
+
   function dashboardCommand() {
     var command = [helperPath(), "--max", String(maxDisplayedTickets * 2)]
     var followed = followedProjects
     if (followed.length > 0)
       command.push("--projects", followed.join(","))
+    if (wantSprint)
+      command.push("--sprint")
     return command
   }
 
@@ -120,6 +137,8 @@ Item {
 
     tickets = Array.isArray(data.tickets) ? data.tickets : []
     projects = Array.isArray(data.projects) ? data.projects : []
+    sprint = data.sprint || null
+    sprintState = String(data.sprintState || "off")
     fetchedAt = String(data.generatedAt || "")
   }
 

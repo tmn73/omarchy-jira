@@ -299,7 +299,8 @@ fetch_sprint_from_issues() {
       | select($active != null)
       | {
           sprint: $active,
-          done: (($issue.fields.status.statusCategory.key // "") == "done"),
+          status: ($issue.fields.status.name // ""),
+          category: ($issue.fields.status.statusCategory.key // ""),
           estimate: ([$points[] | $issue.fields[.]] | map(select(. != null)) | .[0])
         }
     ] as $rows
@@ -309,12 +310,18 @@ fetch_sprint_from_issues() {
             name: ($s.name // ""), goal: ($s.goal // ""),
             startDate: ($s.startDate // ""), endDate: ($s.endDate // ""),
             total: ($rows | length),
-            done: ([$rows[] | select(.done)] | length),
-            points: {
-              total: ([$rows[] | .estimate // 0] | add // 0),
-              done: ([$rows[] | select(.done) | .estimate // 0] | add // 0),
-              estimated: ([$rows[] | select(.estimate != null)] | length)
-            }
+            estimated: ([$rows[] | select(.estimate != null)] | length),
+            statuses: (
+              $rows
+              | group_by(.status)
+              | map({
+                  name: .[0].status,
+                  category: .[0].category,
+                  count: length,
+                  points: ([.[] | .estimate // 0] | add // 0)
+                })
+              | sort_by(-.count)
+            )
           }
       end' <"$file")
   rm -f "$file"
@@ -402,7 +409,7 @@ fetch_sprint() {
     SPRINT_JSON=$(printf '%s' "$sprint_meta" | jq -c '{
       name: (.name // ""), goal: (.goal // ""),
       startDate: (.startDate // ""), endDate: (.endDate // ""),
-      total: 0, done: 0, points: { total: 0, done: 0, estimated: 0 }
+      total: 0, estimated: 0, statuses: []
     }')
     SPRINT_STATE="partial"
     return 0
@@ -413,7 +420,8 @@ fetch_sprint() {
     --argjson points "$POINTS_FIELDS" \
     '
     [.issues[]? | . as $issue | {
-      done: (($issue.fields.status.statusCategory.key // "") == "done"),
+      status: ($issue.fields.status.name // ""),
+      category: ($issue.fields.status.statusCategory.key // ""),
       estimate: ([$points[] | $issue.fields[.]] | map(select(. != null)) | .[0])
     }] as $rows
     | {
@@ -422,12 +430,18 @@ fetch_sprint() {
         startDate: ($meta.startDate // ""),
         endDate: ($meta.endDate // ""),
         total: ($rows | length),
-        done: ([$rows[] | select(.done)] | length),
-        points: {
-          total: ([$rows[] | .estimate // 0] | add // 0),
-          done: ([$rows[] | select(.done) | .estimate // 0] | add // 0),
-          estimated: ([$rows[] | select(.estimate != null)] | length)
-        }
+        estimated: ([$rows[] | select(.estimate != null)] | length),
+        statuses: (
+          $rows
+          | group_by(.status)
+          | map({
+              name: .[0].status,
+              category: .[0].category,
+              count: length,
+              points: ([.[] | .estimate // 0] | add // 0)
+            })
+          | sort_by(-.count)
+        )
       }
     ' <"$AGILE_FILE")
   rm -f "$AGILE_FILE"

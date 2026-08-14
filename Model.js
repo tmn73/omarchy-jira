@@ -229,6 +229,57 @@ var SPRINT_BAR_TIME = "time"
 var SPRINT_BAR_TICKETS = "tickets"
 var SPRINT_BAR_POINTS = "points"
 
+// Decides what "done" means for a sprint, and counts accordingly.
+//
+// Jira's status categories are the only portable default, but they are not the
+// team's opinion. A status like "Ready to Merge" sits in the In Progress
+// category while the team considers that work finished, and a sprint bar that
+// disagrees with the people reading it is worse than no bar.
+//
+// So: a status counts as finished if the user said so, and failing that if Jira
+// puts it in the done category. The setting names statuses, because that is
+// what people recognise on their own board.
+function sprintTotals(sprint, doneStatuses) {
+  var totals = { total: 0, done: 0, points: { total: 0, done: 0 } }
+  if (!sprint)
+    return totals
+
+  var statuses = asArray(sprint.statuses)
+  var chosen = []
+  var explicit = asArray(doneStatuses)
+  for (var c = 0; c < explicit.length; c++)
+    chosen.push(text(explicit[c]).toLowerCase())
+
+  for (var i = 0; i < statuses.length; i++) {
+    var entry = statuses[i]
+    var count = Number(entry.count) || 0
+    var points = Number(entry.points) || 0
+    var finished = chosen.length > 0
+      ? chosen.indexOf(text(entry.name).toLowerCase()) !== -1
+      : text(entry.category) === CATEGORY_DONE
+
+    totals.total += count
+    totals.points.total += points
+    if (finished) {
+      totals.done += count
+      totals.points.done += points
+    }
+  }
+  return totals
+}
+
+// The statuses Jira would call finished, used as the starting selection so the
+// pane opens on something sensible rather than on nothing ticked.
+function defaultDoneStatuses(sprint) {
+  var names = []
+  var statuses = asArray(sprint && sprint.statuses)
+  for (var i = 0; i < statuses.length; i++) {
+    if (text(statuses[i].category) === CATEGORY_DONE)
+      names.push(text(statuses[i].name))
+  }
+  return names
+}
+
 // Turns the raw sprint counts into the bars the panel draws.
 //
 // The percentages are kept next to each other on purpose: a completion bar
@@ -237,13 +288,14 @@ var SPRINT_BAR_POINTS = "points"
 //
 // Nothing here invents a number. A sprint with no estimated ticket reports zero
 // points rather than falling back to counting tickets and calling them points.
-function sprintBars(sprint, wanted, nowMs) {
+function sprintBars(sprint, wanted, nowMs, doneStatuses) {
   if (!sprint)
     return []
 
   var chosen = projectList(wanted)
   var bars = []
   var now = isFinite(nowMs) ? nowMs : Date.now()
+  var totals = sprintTotals(sprint, doneStatuses)
 
   if (chosen.indexOf(SPRINT_BAR_TIME.toUpperCase()) !== -1) {
     var start = Date.parse(text(sprint.startDate))
@@ -260,25 +312,20 @@ function sprintBars(sprint, wanted, nowMs) {
   }
 
   if (chosen.indexOf(SPRINT_BAR_TICKETS.toUpperCase()) !== -1) {
-    var total = Number(sprint.total) || 0
-    var done = Number(sprint.done) || 0
     bars.push({
       id: SPRINT_BAR_TICKETS,
       label: "tickets",
-      percent: total > 0 ? Math.round((done / total) * 100) : 0,
-      detail: done + "/" + total
+      percent: totals.total > 0 ? Math.round((totals.done / totals.total) * 100) : 0,
+      detail: totals.done + "/" + totals.total
     })
   }
 
   if (chosen.indexOf(SPRINT_BAR_POINTS.toUpperCase()) !== -1) {
-    var points = sprint.points || {}
-    var pointsTotal = Number(points.total) || 0
-    var pointsDone = Number(points.done) || 0
     bars.push({
       id: SPRINT_BAR_POINTS,
       label: "points",
-      percent: pointsTotal > 0 ? Math.round((pointsDone / pointsTotal) * 100) : 0,
-      detail: pointsDone + "/" + pointsTotal
+      percent: totals.points.total > 0 ? Math.round((totals.points.done / totals.points.total) * 100) : 0,
+      detail: totals.points.done + "/" + totals.points.total
     })
   }
 
@@ -302,7 +349,7 @@ function estimateCoverage(sprint) {
   if (!sprint)
     return ""
   var total = Number(sprint.total) || 0
-  var estimated = Number((sprint.points || {}).estimated) || 0
+  var estimated = Number(sprint.estimated) || 0
   if (total === 0)
     return ""
   if (estimated === total)
@@ -330,6 +377,8 @@ if (typeof module !== "undefined" && module.exports) {
     mergeSearchResults: mergeSearchResults,
     filterByProject: filterByProject,
     sprintBars: sprintBars,
+    sprintTotals: sprintTotals,
+    defaultDoneStatuses: defaultDoneStatuses,
     estimateCoverage: estimateCoverage,
     projectList: projectList,
     toggleFollowedProject: toggleFollowedProject,

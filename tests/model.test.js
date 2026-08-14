@@ -224,6 +224,140 @@ test('filterByProject tolerates null tickets', () => {
   assert.deepEqual(Model.filterByProject(null, ['DS']), [])
 })
 
+// ---- sprintBars
+
+// Modelled on a real sprint: three statuses Jira calls done, and one the team
+// calls done while Jira does not.
+const SPRINT = {
+  name: 'Demo Sprint 12',
+  startDate: '2026-08-05T00:00:00.000Z',
+  endDate: '2026-08-19T00:00:00.000Z',
+  total: 41,
+  estimated: 13,
+  statuses: [
+    { name: 'Released', category: 'done', count: 15, points: 16 },
+    { name: 'In Progress', category: 'indeterminate', count: 13, points: 26 },
+    { name: 'Done - Ready to Release', category: 'done', count: 5, points: 3 },
+    { name: 'Done - No Release', category: 'done', count: 4, points: 1 },
+    { name: 'Blocked', category: 'indeterminate', count: 2, points: 0 },
+    { name: 'Ready to Merge', category: 'indeterminate', count: 2, points: 3 }
+  ]
+}
+
+// Day 7 of a 14 day sprint.
+const MIDPOINT = Date.parse('2026-08-12T00:00:00.000Z')
+
+test('sprintBars reports time and work side by side', () => {
+  const bars = Model.sprintBars(SPRINT, ['time', 'tickets'], MIDPOINT)
+  assert.deepEqual(bars.map(b => b.id), ['time', 'tickets'])
+  assert.equal(bars[0].percent, 50)
+  assert.equal(bars[0].detail, '7d left')
+  // 15 + 5 + 4 tickets in the done category.
+  assert.equal(bars[1].percent, 59)
+  assert.equal(bars[1].detail, '24/41')
+})
+
+test('sprintBars can show points too', () => {
+  const bars = Model.sprintBars(SPRINT, ['time', 'tickets', 'points'], MIDPOINT)
+  assert.deepEqual(bars.map(b => b.id), ['time', 'tickets', 'points'])
+  // 16 + 3 + 1 points done out of 49.
+  assert.equal(bars[2].percent, 41)
+  assert.equal(bars[2].detail, '20/49')
+})
+
+// ---- sprintTotals
+
+test('sprintTotals falls back to what Jira calls done', () => {
+  const totals = Model.sprintTotals(SPRINT, [])
+  assert.equal(totals.total, 41)
+  assert.equal(totals.done, 24)
+  assert.equal(totals.points.total, 49)
+  assert.equal(totals.points.done, 20)
+})
+
+test("sprintTotals honours the team's own definition of done", () => {
+  // Ready to Merge is finished as far as this team is concerned, even though
+  // Jira files it under In Progress.
+  const chosen = ['Released', 'Done - Ready to Release', 'Done - No Release', 'Ready to Merge']
+  const totals = Model.sprintTotals(SPRINT, chosen)
+  assert.equal(totals.done, 26)
+  assert.equal(totals.points.done, 23)
+})
+
+test('sprintTotals matches status names case insensitively', () => {
+  assert.equal(Model.sprintTotals(SPRINT, ['released']).done, 15)
+})
+
+test('sprintTotals tolerates no sprint', () => {
+  assert.deepEqual(Model.sprintTotals(null, []), { total: 0, done: 0, points: { total: 0, done: 0 } })
+})
+
+test('sprintBars uses the chosen done statuses', () => {
+  const bars = Model.sprintBars(SPRINT, ['tickets'], MIDPOINT, ['Released', 'Ready to Merge'])
+  assert.equal(bars[0].detail, '17/41')
+})
+
+// ---- defaultDoneStatuses
+
+test('defaultDoneStatuses starts from what Jira calls done', () => {
+  assert.deepEqual(Model.defaultDoneStatuses(SPRINT),
+    ['Released', 'Done - Ready to Release', 'Done - No Release'])
+})
+
+test('defaultDoneStatuses tolerates no sprint', () => {
+  assert.deepEqual(Model.defaultDoneStatuses(null), [])
+})
+
+test('sprintBars shows nothing when nothing is asked for', () => {
+  assert.deepEqual(Model.sprintBars(SPRINT, [], MIDPOINT), [])
+  assert.deepEqual(Model.sprintBars(SPRINT, null, MIDPOINT), [])
+})
+
+test('sprintBars tolerates no sprint', () => {
+  assert.deepEqual(Model.sprintBars(null, ['time'], MIDPOINT), [])
+})
+
+test('sprintBars never reports negative or overrun time', () => {
+  const before = Date.parse('2026-08-01T00:00:00.000Z')
+  const after = Date.parse('2026-09-01T00:00:00.000Z')
+  assert.equal(Model.sprintBars(SPRINT, ['time'], before)[0].percent, 0)
+  assert.equal(Model.sprintBars(SPRINT, ['time'], after)[0].percent, 100)
+  assert.equal(Model.sprintBars(SPRINT, ['time'], after)[0].detail, 'ended')
+})
+
+test('sprintBars omits the time bar when the sprint has no usable dates', () => {
+  const undated = Object.assign({}, SPRINT, { startDate: '', endDate: '' })
+  assert.deepEqual(Model.sprintBars(undated, ['time', 'tickets'], MIDPOINT).map(b => b.id), ['tickets'])
+})
+
+test('sprintBars reports zero rather than inventing a denominator', () => {
+  // A sprint where nobody estimated anything must not borrow the ticket count
+  // and present it as points.
+  const unestimated = Object.assign({}, SPRINT, {
+    estimated: 0,
+    statuses: SPRINT.statuses.map(s => Object.assign({}, s, { points: 0 }))
+  })
+  const bars = Model.sprintBars(unestimated, ['points'], MIDPOINT)
+  assert.equal(bars[0].percent, 0)
+  assert.equal(bars[0].detail, '0/0')
+})
+
+// ---- estimateCoverage
+
+test('estimateCoverage says how much of the sprint is estimated', () => {
+  assert.equal(Model.estimateCoverage(SPRINT), '13 of 41 tickets estimated')
+})
+
+test('estimateCoverage is plain when everything is estimated', () => {
+  const full = Object.assign({}, SPRINT, { total: 41, estimated: 41 })
+  assert.equal(Model.estimateCoverage(full), 'every ticket is estimated')
+})
+
+test('estimateCoverage says nothing without a sprint', () => {
+  assert.equal(Model.estimateCoverage(null), '')
+  assert.equal(Model.estimateCoverage({ total: 0 }), '')
+})
+
 // ---- limit
 
 test('limit caps the list', () => {
