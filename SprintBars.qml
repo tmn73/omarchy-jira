@@ -140,20 +140,23 @@ Column {
             }
           }
 
-          // Where the clock stands on this bar.
+          // Where the clock stands on this bar. Past it is ahead of schedule,
+          // short of it is behind.
           //
-          // The colour already says whether the work is keeping up, but colour
-          // alone is not a signal: this user's theme paints its alert colour
-          // green, and plenty of people cannot separate the two hues anyway.
-          // A mark to be ahead of or behind works in any theme and any eyes.
+          // It has to read against two different backgrounds, since it can fall
+          // on the filled part or the empty part depending on how the sprint is
+          // going, and both invert between light and dark themes. So it is not
+          // drawn on the bar but through it: full strength, and tall enough to
+          // stick out top and bottom onto the panel itself. Those overhangs are
+          // what stays visible when the mark and the fill happen to be the same
+          // shade.
           Rectangle {
             visible: barRow.modelData.mark !== null && barRow.modelData.mark !== undefined
-            x: parent.width * Math.max(0, Math.min(100, barRow.modelData.mark || 0)) / 100
-            width: Math.max(1, Style.spacing.hairline)
-            height: parent.height + Style.space(2)
+            x: parent.width * Math.max(0, Math.min(100, barRow.modelData.mark || 0)) / 100 - width / 2
+            width: Math.max(2, Style.spacing.hairline * 2)
+            height: parent.height + Style.space(5)
             anchors.verticalCenter: parent.verticalCenter
             color: root.foreground
-            opacity: 0.55
           }
         }
 
