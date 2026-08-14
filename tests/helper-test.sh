@@ -266,14 +266,16 @@ assert_jq '.sprint.goal == "Ship the rollout"' "$payload" "sprint goal missing"
 assert_jq '.sprint.startDate | test("^2026-08-05")' "$payload" "sprint start date missing"
 assert_jq '.sprint.endDate | test("^2026-08-19")' "$payload" "sprint end date missing"
 assert_jq '.sprint.total == 4' "$payload" "sprint ticket total is wrong"
-assert_jq '.sprint.done == 2' "$payload" "sprint done count is wrong"
+assert_jq '.sprint.estimated == 3' "$payload" "sprint estimated count is wrong"
 
-# Both measures travel in the payload, so choosing between them is a display
-# decision. The estimated count is what makes that choice an informed one:
-# counting points is misleading when most tickets carry no estimate.
-assert_jq '.sprint.points.total == 13' "$payload" "sprint point total is wrong"
-assert_jq '.sprint.points.done == 8' "$payload" "sprint point done is wrong"
-assert_jq '.sprint.points.estimated == 3' "$payload" "sprint estimated count is wrong"
+# The helper reports the breakdown by status and nothing more. What counts as
+# finished is the team's call, and only the panel knows what the team said, so
+# no total is precomputed here.
+assert_jq '.sprint.statuses | length == 4' "$payload" "the status breakdown is missing"
+assert_jq '[.sprint.statuses[] | select(.category == "done") | .count] | add == 2' "$payload" "done counts are wrong"
+assert_jq '[.sprint.statuses[] | .count] | add == 4' "$payload" "status counts do not add up to the total"
+assert_jq '[.sprint.statuses[] | .points] | add == 13' "$payload" "status points do not add up"
+assert_jq '[.sprint.statuses[] | select(.name == "Released")][0].category == "done"' "$payload" "a status lost its category"
 
 # A scrum board is picked over a kanban one: kanban boards have no sprints.
 assert_contains "$(cat "$STUB_DIR/calls")" "/rest/agile/1.0/board/293/sprint" "the scrum board was not chosen"
@@ -305,8 +307,8 @@ assert_jq '.tickets | length == 4' "$payload" "a sprint scope error lost the tic
 assert_jq '.sprintState == "derived"' "$payload" "the fallback was not used"
 assert_jq '.sprint.name == "Demo Sprint 12"' "$payload" "the fallback found no sprint"
 assert_jq '.sprint.total == 3' "$payload" "the fallback counted the wrong number of tickets"
-assert_jq '.sprint.done == 1' "$payload" "the fallback counted the wrong number of done tickets"
-assert_jq '.sprint.points.total == 8' "$payload" "the fallback summed the wrong points"
+assert_jq '[.sprint.statuses[] | select(.category == "done") | .count] | add == 1' "$payload" "the fallback counted the wrong number of done tickets"
+assert_jq '[.sprint.statuses[] | .points] | add == 8' "$payload" "the fallback summed the wrong points"
 assert_jq '.sprint.name != "Demo Sprint 11"' "$payload" "the fallback used a closed sprint"
 
 # When even the fallback cannot run, the tickets still arrive.
