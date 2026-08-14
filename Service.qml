@@ -1,0 +1,201 @@
+import QtQuick
+import Quickshell.Io
+import "Model.js" as Model
+
+// Jira data service. The helper owns every API call and every credential
+// access; this item schedules it and exposes one stable model to the panel.
+//
+// The rule that shapes this file: a failed refresh never discards a good
+// payload. Tickets and their timestamp are replaced only when a run comes back
+// ok. Everything else updates the state and the message and leaves the data
+// alone, which is what lets a dropped network show the last known tickets with
+// an honest "as of" time instead of an empty panel.
+Item {
+  id: root
+
+  property var settings: ({})
+
+  property bool loading: false
+  property string state: "loading"
+  property string message: qsTr("Loading Jira")
+  property string site: ""
+  property string account: ""
+  property string fetchedAt: ""
+  property var tickets: []
+  property var projects: []
+
+  property var searchResults: []
+  property bool searching: false
+  property string searchQuery: ""
+
+  property bool refreshQueued: false
+  property string _stdout: ""
+  property string _searchStdout: ""
+
+  readonly property var groups: Model.groupTickets(tickets)
+  readonly property int waitingCount: groups.waiting.length
+  readonly property int assignedCount: groups.assigned.length
+  readonly property int barCount: Model.barCount(tickets, String(setting("barCount", "Waiting on you")))
+  readonly property int maxDisplayedTickets: intSetting("maxDisplayedTickets", 25, 5, 100)
+  readonly property int refreshIntervalSec: intSetting("refreshIntervalSec", 900, 60, 3600)
+  readonly property bool connected: state === "ok"
+  readonly property bool hasData: tickets.length > 0
+
+  function setting(name, fallback) {
+    var value = settings ? settings[name] : undefined
+    return value === undefined || value === null ? fallback : value
+  }
+
+  function intSetting(name, fallback, minimum, maximum) {
+    var value = parseInt(String(setting(name, fallback)), 10)
+    if (!isFinite(value))
+      value = fallback
+    return Math.max(minimum, Math.min(maximum, value))
+  }
+
+  function helperPath() {
+    return Qt.resolvedUrl("omarchy-jira-fetch").toString().replace(/^file:\/\//, "")
+  }
+
+  function followedProjects() {
+    var value = setting("followedProjects", [])
+    if (!Array.isArray(value))
+      return []
+    return value.filter(function (key) { return String(key || "") !== "" })
+  }
+
+  function dashboardCommand() {
+    var command = [helperPath(), "--max", String(maxDisplayedTickets * 2)]
+    var followed = followedProjects()
+    if (followed.length > 0)
+      command.push("--projects", followed.join(","))
+    return command
+  }
+
+  function refresh() {
+    if (fetchProcess.running) {
+      refreshQueued = true
+      return
+    }
+    refreshQueued = false
+    loading = true
+    _stdout = ""
+    fetchProcess.command = dashboardCommand()
+    fetchProcess.running = true
+  }
+
+  function apply(raw) {
+    var data
+    try {
+      data = JSON.parse(String(raw || ""))
+    } catch (error) {
+      state = "error"
+      message = qsTr("Jira returned a response this widget could not read.")
+      return
+    }
+
+    state = String(data.state || "error")
+    message = String(data.message || "")
+
+    if (String(data.site || "") !== "")
+      site = String(data.site)
+    if (String(data.account || "") !== "")
+      account = String(data.account)
+
+    if (state !== "ok")
+      return
+
+    tickets = Array.isArray(data.tickets) ? data.tickets : []
+    projects = Array.isArray(data.projects) ? data.projects : []
+    fetchedAt = String(data.generatedAt || "")
+  }
+
+  // A ticket the widget has never heard of has no local match, so search always
+  // asks the helper as well. The panel merges both sides.
+  function search(query) {
+    searchQuery = String(query || "")
+    if (searchQuery.trim() === "") {
+      clearSearch()
+      return
+    }
+    if (searchProcess.running)
+      searchProcess.running = false
+    searching = true
+    _searchStdout = ""
+    searchProcess.command = [helperPath(), "--search", searchQuery]
+    searchProcess.running = true
+  }
+
+  function clearSearch() {
+    searchQuery = ""
+    searchResults = []
+    searching = false
+    if (searchProcess.running)
+      searchProcess.running = false
+  }
+
+  function applySearch(raw) {
+    try {
+      var data = JSON.parse(String(raw || ""))
+      searchResults = (String(data.state || "") === "ok" && Array.isArray(data.tickets)) ? data.tickets : []
+    } catch (error) {
+      searchResults = []
+    }
+  }
+
+  visible: false
+
+  Timer {
+    interval: root.refreshIntervalSec * 1000
+    repeat: true
+    running: true
+    triggeredOnStart: true
+    onTriggered: root.refresh()
+  }
+
+  Process {
+    id: fetchProcess
+
+    running: false
+    command: []
+    onExited: function (exitCode) {
+      root.loading = false
+      var output = String(collector.text || root._stdout || "")
+      if (output.trim() !== "") {
+        root.apply(output)
+      } else {
+        root.state = "error"
+        root.message = qsTr("The Jira helper produced no output.")
+      }
+      if (root.refreshQueued) {
+        root.refreshQueued = false
+        Qt.callLater(root.refresh)
+      }
+    }
+
+    stdout: StdioCollector {
+      id: collector
+
+      waitForEnd: true
+      onStreamFinished: root._stdout = text
+    }
+  }
+
+  Process {
+    id: searchProcess
+
+    running: false
+    command: []
+    onExited: function (exitCode) {
+      root.searching = false
+      root.applySearch(String(searchCollector.text || root._searchStdout || ""))
+    }
+
+    stdout: StdioCollector {
+      id: searchCollector
+
+      waitForEnd: true
+      onStreamFinished: root._searchStdout = text
+    }
+  }
+}
