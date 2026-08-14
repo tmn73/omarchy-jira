@@ -90,22 +90,35 @@ cmd_clear() {
   echo "Credential removed."
 }
 
-# Validates the triple against Jira before anything is stored, so a typo never
-# leaves a broken credential in the keyring for the widget to trip over later.
-# Returns the HTTP status on stdout.
+# Every Jira site publishes its cloud id without authentication. Scoped API
+# tokens, which is what Atlassian issues today, are only accepted against
+# api.atlassian.com/ex/jira/<cloudId>, never against the site host, so this
+# lookup is what makes a freshly created token work at all.
+discover_cloud_id() {
+  local site="$1"
+  curl --silent --max-time 10 \
+    --header 'Accept: application/json' \
+    --url "https://$site/_edge/tenant_info" 2>/dev/null |
+    jq -r '.cloudId // empty' 2>/dev/null || true
+}
+
+# Validates the credential against one base URL before anything is stored, so a
+# typo never leaves a broken credential in the keyring for the widget to trip
+# over later. Returns the HTTP status on stdout.
 validate_credential() {
-  local site="$1" email="$2" token="$3" body_file="$4"
+  local base="$1" email="$2" token="$3" body_file="$4"
   curl --silent --show-error \
     --config <(printf 'user = "%s:%s"\n' "$email" "$token") \
     --header 'Accept: application/json' \
     --output "$body_file" \
     --write-out '%{http_code}' \
-    --url "https://$site/rest/api/3/myself"
+    --url "$base/rest/api/3/myself"
 }
 
 cmd_setup() {
   require_tool curl
   require_tool secret-tool
+  require_tool jq
 
   local site email token
   read -r -p "Jira site (for example your-team.atlassian.net): " site
@@ -120,34 +133,61 @@ cmd_setup() {
   echo
   [[ -n ${token:-} ]] || die "an API token is required"
 
-  local status http_code
+  # Two kinds of API token are in circulation and they accept different hosts.
+  # Rather than asking the user which one they hold, which they have no way of
+  # knowing, try the modern base first and fall back to the site itself.
+  local cloud_id candidates=() base accepted_base="" status http_code last_code=""
+  cloud_id=$(discover_cloud_id "$site")
+  [[ -n $cloud_id ]] && candidates+=("https://api.atlassian.com/ex/jira/$cloud_id")
+  candidates+=("https://$site")
+
   BODY_FILE=$(mktemp)
 
-  status=0
-  http_code=$(validate_credential "$site" "$email" "$token" "$BODY_FILE") || status=$?
+  for base in "${candidates[@]}"; do
+    status=0
+    http_code=$(validate_credential "$base" "$email" "$token" "$BODY_FILE") || status=$?
 
-  if ((status != 0)); then
-    die "could not reach https://$site, so nothing was stored"
+    if ((status != 0)); then
+      last_code="unreachable"
+      continue
+    fi
+
+    case "$http_code" in
+    200)
+      accepted_base="$base"
+      break
+      ;;
+    401 | 403 | 404)
+      last_code="$http_code"
+      ;;
+    *)
+      last_code="$http_code"
+      ;;
+    esac
+  done
+
+  if [[ -z $accepted_base ]]; then
+    case "$last_code" in
+    unreachable)
+      die "could not reach https://$site, so nothing was stored"
+      ;;
+    401)
+      die "Jira rejected that email and token, so nothing was stored"
+      ;;
+    403)
+      die "that account is authenticated but not permitted to read the API, so nothing was stored"
+      ;;
+    404)
+      die "https://$site does not look like a Jira site, so nothing was stored"
+      ;;
+    *)
+      die "Jira answered $last_code, so nothing was stored"
+      ;;
+    esac
   fi
 
-  case "$http_code" in
-  200) ;;
-  401)
-    die "Jira rejected that email and token, so nothing was stored"
-    ;;
-  403)
-    die "that account is authenticated but not permitted to read the API, so nothing was stored"
-    ;;
-  404)
-    die "https://$site does not look like a Jira site, so nothing was stored"
-    ;;
-  *)
-    die "Jira answered $http_code, so nothing was stored"
-    ;;
-  esac
-
   printf '%s' "$token" | secret-tool store --label="$LABEL" \
-    service "$SERVICE" account "$email" site "$site"
+    service "$SERVICE" account "$email" site "$site" base "$accepted_base"
 
   local display_name=""
   if command -v jq >/dev/null 2>&1; then
