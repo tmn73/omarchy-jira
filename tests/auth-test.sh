@@ -43,7 +43,9 @@ mkdir -p "$STUB_DIR" "$sandbox/bin"
 
 # Keep the interpreters the stubs and the script need, and nothing else, so an
 # accidental call to a real binary fails loudly instead of silently working.
-for tool in bash cat rm mktemp grep sed jq; do
+# Deliberately minimal: no grep, no sed. The script parses credential output in
+# bash on purpose, and this list is what keeps that true.
+for tool in bash cat rm mktemp jq; do
   path=$(command -v "$tool" 2>/dev/null) && ln -sf "$path" "$sandbox/bin/$(basename "$tool")"
 done
 
@@ -119,7 +121,6 @@ store)
     esac
   done
   {
-    printf '[/org/freedesktop/secrets/collection/login/1]\n'
     printf 'label = %s\n' "$label"
     for ((i = 0; i < ${#attrs[@]}; i += 2)); do
       printf 'attribute.%s = %s\n' "${attrs[i]}" "${attrs[i + 1]}"
@@ -131,8 +132,12 @@ lookup)
   cat "$STUB_DIR/vault"
   ;;
 search)
-  [[ -s $STUB_DIR/vault-attrs ]] || exit 1
-  cat "$STUB_DIR/vault-attrs"
+  # Faithful to the real tool, which splits its output across both streams and
+  # puts the secret on stdout. Nothing in this project may call it.
+  [[ -s $STUB_DIR/vault ]] || exit 1
+  printf '[/org/freedesktop/secrets/collection/login/1]\n'
+  printf 'secret = %s\n' "$(cat "$STUB_DIR/vault")"
+  cat "$STUB_DIR/vault-attrs" >&2
   ;;
 clear)
   rm -f "$STUB_DIR/vault" "$STUB_DIR/vault-attrs"
@@ -169,18 +174,25 @@ PATH="$sandbox/bin" "$SCRIPT" --help >/dev/null || fail "--help failed"
 
 reset_state
 output=$(run_setup "$SITE" "$EMAIL" "$TOKEN") || fail "setup failed on a valid token: $output"
-[[ $(cat "$STUB_DIR/vault") == "$TOKEN" ]] || fail "the stored secret is not the token"
-attrs=$(cat "$STUB_DIR/vault-attrs")
-assert_contains "$attrs" "attribute.service = omarchy-jira" "service attribute missing"
-assert_contains "$attrs" "attribute.account = $EMAIL" "account attribute missing"
-assert_contains "$attrs" "attribute.site = $SITE" "site attribute missing"
+
+stored=$(cat "$STUB_DIR/vault")
+jq -e . >/dev/null 2>&1 <<<"$stored" || fail "the stored credential is not valid JSON"
+[[ $(jq -r .token <<<"$stored") == "$TOKEN" ]] || fail "the stored token is wrong"
+[[ $(jq -r .site <<<"$stored") == "$SITE" ]] || fail "the stored site is wrong"
+[[ $(jq -r .account <<<"$stored") == "$EMAIL" ]] || fail "the stored account is wrong"
+
+assert_contains "$(cat "$STUB_DIR/vault-attrs")" "attribute.service = omarchy-jira" "service attribute missing"
 
 # ---- Scoped tokens only work against api.atlassian.com with a cloud id, so
 #      that is the base the setup must discover, verify, and store.
 
 assert_contains "$(cat "$STUB_DIR/calls")" "https://$SITE/_edge/tenant_info" "the cloud id was never looked up"
 assert_contains "$(cat "$STUB_DIR/calls")" "$API_BASE/rest/api/3/myself" "validation did not go through api.atlassian.com"
-assert_contains "$attrs" "attribute.base = $API_BASE" "the working base URL was not stored"
+[[ $(jq -r .base <<<"$stored") == "$API_BASE" ]] || fail "the working base URL was not stored"
+
+# ---- secret-tool search prints the secret on stdout, so nothing may call it
+
+assert_not_contains "$(cat "$STUB_DIR/calls")" "secret-tool search" "the script called secret-tool search"
 
 # The token has to reach curl somehow. It must be through the config channel.
 assert_contains "$(cat "$STUB_DIR/creds")" "$TOKEN" "the token never reached curl through --config"
@@ -193,7 +205,7 @@ assert_not_contains "$(cat "$STUB_DIR/calls")" "$TOKEN" "the token leaked into a
 
 reset_state
 output=$(run_setup "https://$SITE/" "$EMAIL" "$TOKEN") || fail "setup failed on a URL-shaped site: $output"
-assert_contains "$(cat "$STUB_DIR/vault-attrs")" "attribute.site = $SITE" "site was not normalised"
+[[ $(jq -r .site <"$STUB_DIR/vault") == "$SITE" ]] || fail "site was not normalised"
 assert_contains "$(cat "$STUB_DIR/calls")" "https://$SITE/_edge/tenant_info" "the normalised host was not used for the tenant lookup"
 assert_not_contains "$(cat "$STUB_DIR/calls")" "https://https://" "a URL-shaped answer produced a doubled scheme"
 
@@ -204,7 +216,7 @@ assert_not_contains "$(cat "$STUB_DIR/calls")" "https://https://" "a URL-shaped 
 reset_state
 output=$(CURL_STUB_CODE_API=401 CURL_STUB_CODE_SITE=200 run_setup "$SITE" "$EMAIL" "$TOKEN") ||
   fail "setup failed for a classic token: $output"
-assert_contains "$(cat "$STUB_DIR/vault-attrs")" "attribute.base = https://$SITE" "the classic token did not fall back to the site base"
+[[ $(jq -r .base <"$STUB_DIR/vault") == "https://$SITE" ]] || fail "the classic token did not fall back to the site base"
 
 # ---- When the tenant lookup fails there is no cloud id, and the site base is
 #      the only candidate left
@@ -212,7 +224,7 @@ assert_contains "$(cat "$STUB_DIR/vault-attrs")" "attribute.base = https://$SITE
 reset_state
 output=$(TENANT_STUB_FAIL=1 run_setup "$SITE" "$EMAIL" "$TOKEN") ||
   fail "setup failed when the tenant lookup was unavailable: $output"
-assert_contains "$(cat "$STUB_DIR/vault-attrs")" "attribute.base = https://$SITE" "no fallback base after a failed tenant lookup"
+[[ $(jq -r .base <"$STUB_DIR/vault") == "https://$SITE" ]] || fail "no fallback base after a failed tenant lookup"
 
 # ---- 401 everywhere stores nothing
 
@@ -255,7 +267,10 @@ run_setup "$SITE" "$EMAIL" "$TOKEN" >/dev/null || fail "setup failed before the 
 output=$(run_flag --status) || fail "--status failed with a credential stored"
 assert_contains "$output" "$SITE" "--status does not show the site"
 assert_contains "$output" "$EMAIL" "--status does not show the account"
+# secret-tool prints the secret in its search output, so this assertion is the
+# one standing between a status line and a credential leak.
 assert_not_contains "$output" "$TOKEN" "--status printed the token"
+assert_not_contains "$output" "secret =" "--status echoed raw secret-tool output"
 
 # ---- --clear removes the entry
 

@@ -61,27 +61,37 @@ normalize_site() {
   printf '%s' "$value"
 }
 
-# Reads one attribute out of secret-tool's search output. Attributes are
-# readable without unlocking the secret itself, which is what lets --status
-# report the connection without ever touching the token.
-stored_attribute() {
-  local name="$1" line
-  line=$(secret-tool search service "$SERVICE" 2>/dev/null |
-    grep -m 1 "^attribute\.$name = " || true)
-  printf '%s' "${line#attribute.$name = }"
+# The whole credential is stored as one JSON document under a single keyring
+# entry, and read back with `secret-tool lookup`.
+#
+# The alternative, keeping the site and account as keyring attributes, looks
+# tidier but cannot be read safely: `secret-tool search` prints the secret
+# itself on stdout and the attributes on stderr, so reading the attributes means
+# inviting the token into the script's output. `lookup` returns exactly what was
+# asked for and nothing else.
+credential_json() {
+  secret-tool lookup service "$SERVICE" 2>/dev/null || true
 }
 
-has_credential() {
-  secret-tool lookup service "$SERVICE" >/dev/null 2>&1
+# Reads one field from the credential. The document is piped rather than passed
+# as an argument or a here-string: arguments are visible in ps, and bash backs
+# here-strings with a temporary file, which would put the token on disk.
+credential_field() {
+  local name="$1" json="$2"
+  [[ -n $json ]] || return 0
+  printf '%s' "$json" | jq -r --arg name "$name" '.[$name] // empty' 2>/dev/null || true
 }
 
 cmd_status() {
   require_tool secret-tool
-  if ! has_credential; then
+  require_tool jq
+  local json
+  json=$(credential_json)
+  if [[ -z $json ]]; then
     echo "Not connected. Run omarchy-jira-auth to connect a Jira site." >&2
     return 1
   fi
-  echo "Connected to $(stored_attribute site) as $(stored_attribute account)"
+  echo "Connected to $(credential_field site "$json") as $(credential_field account "$json")"
 }
 
 cmd_clear() {
@@ -186,8 +196,13 @@ cmd_setup() {
     esac
   fi
 
-  printf '%s' "$token" | secret-tool store --label="$LABEL" \
-    service "$SERVICE" account "$email" site "$site" base "$accepted_base"
+  # jq builds the document so a token containing a quote or a backslash cannot
+  # produce malformed JSON, and the result is piped straight into the keyring
+  # without ever touching a file or an argument.
+  jq -nc --arg site "$site" --arg account "$email" --arg base "$accepted_base" \
+    --rawfile token <(printf '%s' "$token") \
+    '{site: $site, account: $account, base: $base, token: ($token | rtrimstr("\n"))}' |
+    secret-tool store --label="$LABEL" service "$SERVICE" account "$email"
 
   local display_name=""
   if command -v jq >/dev/null 2>&1; then
