@@ -93,6 +93,8 @@ Item {
   }
 
   function dashboardCommand() {
+    // Twice the display cap, because the cap applies per group: a run of
+    // in-progress work must not starve the to-do list of rows to show.
     var command = [helperPath(), "--max", String(maxDisplayedTickets * 2)]
     var followed = followedProjects
     if (followed.length > 0)

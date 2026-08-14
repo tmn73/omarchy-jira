@@ -12,8 +12,6 @@
 var CATEGORY_WAITING = "indeterminate"
 var CATEGORY_DONE = "done"
 
-var ISSUE_KEY_PATTERN = /^[A-Za-z][A-Za-z0-9_]*-[0-9]+$/
-
 var MINUTE = 60
 var HOUR = 3600
 var DAY = 86400
@@ -52,18 +50,6 @@ function groupTickets(tickets) {
   return { waiting: waiting, assigned: assigned }
 }
 
-function looksLikeIssueKey(value) {
-  return ISSUE_KEY_PATTERN.test(text(value).trim())
-}
-
-// Returns the canonical form of an issue key, or an empty string when the input
-// is not one. Callers use the empty string to decide they are dealing with free
-// text instead.
-function normalizeIssueKey(value) {
-  var trimmed = text(value).trim()
-  return ISSUE_KEY_PATTERN.test(trimmed) ? trimmed.toUpperCase() : ""
-}
-
 function relativeTime(value, nowMs) {
   var then = Date.parse(text(value))
   if (!isFinite(then))
@@ -80,6 +66,54 @@ function relativeTime(value, nowMs) {
   if (seconds < MONTH)
     return Math.floor(seconds / DAY) + "d ago"
   return Math.floor(seconds / MONTH) + "mo ago"
+}
+
+// Stamps a relative age onto each row.
+//
+// Lives here rather than in the panel so rows never reach for a clock, and so
+// the whole list is dated from one instant instead of each row reading the
+// time as it renders.
+function decorateRows(rows, nowMs) {
+  var list = asArray(rows)
+  var now = isFinite(nowMs) ? nowMs : Date.now()
+  var decorated = []
+  for (var i = 0; i < list.length; i++) {
+    var copy = {}
+    for (var name in list[i]) {
+      if (Object.prototype.hasOwnProperty.call(list[i], name))
+        copy[name] = list[i][name]
+    }
+    copy.age = relativeTime(list[i].updated, now)
+    decorated.push(copy)
+  }
+  return decorated
+}
+
+// The key the cursor lands on after a move.
+//
+// Keyboard navigation walks one flat list, so crossing from the last row of a
+// section into the first of the next is the same step as any other. Moving from
+// nowhere lands on an end rather than doing nothing, which is what makes the
+// first arrow press useful.
+function nextKey(tickets, currentKey, delta) {
+  var list = asArray(tickets)
+  if (list.length === 0)
+    return ""
+
+  var index = -1
+  for (var i = 0; i < list.length; i++) {
+    if (text(list[i].key) === text(currentKey)) {
+      index = i
+      break
+    }
+  }
+
+  if (index === -1)
+    index = delta > 0 ? 0 : list.length - 1
+  else
+    index = Math.max(0, Math.min(list.length - 1, index + delta))
+
+  return text(list[index].key)
 }
 
 // Matches a query against the key and the summary. This runs on every keystroke
@@ -204,6 +238,33 @@ function toggleFollowedProject(followed, key, allKeys) {
 
   if (next.length === 0 || (all.length > 0 && next.length === all.length))
     return []
+  return next
+}
+
+// Applies one click on a done-status checkbox.
+//
+// The first click has to start from what is drawn, which is Jira's own idea of
+// done, otherwise ticking one status would silently unmark every other.
+function toggleDoneStatus(current, name, defaults) {
+  var selection = asArray(current)
+  if (selection.length === 0)
+    selection = asArray(defaults)
+
+  var wanted = text(name)
+  if (wanted === "")
+    return selection.slice()
+
+  var lowered = wanted.toLowerCase()
+  var next = []
+  var found = false
+  for (var i = 0; i < selection.length; i++) {
+    if (text(selection[i]).toLowerCase() === lowered)
+      found = true
+    else
+      next.push(selection[i])
+  }
+  if (!found)
+    next.push(wanted)
   return next
 }
 
@@ -392,9 +453,9 @@ function limit(tickets, max) {
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     groupTickets: groupTickets,
-    looksLikeIssueKey: looksLikeIssueKey,
-    normalizeIssueKey: normalizeIssueKey,
     relativeTime: relativeTime,
+    decorateRows: decorateRows,
+    nextKey: nextKey,
     filterTickets: filterTickets,
     mergeSearchResults: mergeSearchResults,
     filterByProject: filterByProject,
@@ -402,6 +463,7 @@ if (typeof module !== "undefined" && module.exports) {
     sprintTotals: sprintTotals,
     sprintTimeLeft: sprintTimeLeft,
     defaultDoneStatuses: defaultDoneStatuses,
+    toggleDoneStatus: toggleDoneStatus,
     estimateCoverage: estimateCoverage,
     projectList: projectList,
     toggleFollowedProject: toggleFollowedProject,

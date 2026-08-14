@@ -61,26 +61,8 @@ Panel {
     return keys
   }
 
-  // The first click has to start from what is drawn, which is Jira's own idea
-  // of done, otherwise ticking one status would silently unmark all the others.
   function toggleDoneStatus(name) {
-    var current = jira.doneStatuses.slice()
-    if (current.length === 0)
-      current = Model.defaultDoneStatuses(jira.sprint)
-
-    var lowered = name.toLowerCase()
-    var next = []
-    var found = false
-    for (var i = 0; i < current.length; i++) {
-      if (String(current[i]).toLowerCase() === lowered)
-        found = true
-      else
-        next.push(current[i])
-    }
-    if (!found)
-      next.push(name)
-
-    setSetting("doneStatuses", next)
+    setSetting("doneStatuses", Model.toggleDoneStatus(jira.doneStatuses, name, Model.defaultDoneStatuses(jira.sprint)))
   }
 
   function toggleSprintBar(id) {
@@ -124,27 +106,9 @@ Panel {
     return Model.limit(groups.waiting, jira.maxDisplayedTickets)
       .concat(Model.limit(groups.assigned, jira.maxDisplayedTickets))
   }
-  readonly property var waitingRows: (showSettings || searchActive) ? [] : decorate(Model.limit(Model.groupTickets(jira.tickets).waiting, jira.maxDisplayedTickets))
-  readonly property var assignedRows: (showSettings || searchActive) ? [] : decorate(Model.limit(Model.groupTickets(jira.tickets).assigned, jira.maxDisplayedTickets))
-  readonly property var searchRows: (showSettings || !searchActive) ? [] : decorate(visibleTickets)
-
-  // Relative ages are computed once per render pass rather than per row, and
-  // stamped onto the copies the rows receive. Rows stay free of clock access.
-  function decorate(rows) {
-    var now = Date.now()
-    var decorated = []
-    for (var i = 0; i < rows.length; i++) {
-      var source = rows[i]
-      var copy = {}
-      for (var name in source) {
-        if (Object.prototype.hasOwnProperty.call(source, name))
-          copy[name] = source[name]
-      }
-      copy.age = Model.relativeTime(source.updated, now)
-      decorated.push(copy)
-    }
-    return decorated
-  }
+  readonly property var waitingRows: searchActive ? [] : Model.decorateRows(Model.limit(Model.groupTickets(jira.tickets).waiting, jira.maxDisplayedTickets), Date.now())
+  readonly property var assignedRows: searchActive ? [] : Model.decorateRows(Model.limit(Model.groupTickets(jira.tickets).assigned, jira.maxDisplayedTickets), Date.now())
+  readonly property var searchRows: !searchActive ? [] : Model.decorateRows(visibleTickets, Date.now())
 
   function ticketAt(key) {
     for (var i = 0; i < visibleTickets.length; i++) {
@@ -155,18 +119,7 @@ Panel {
   }
 
   function moveHighlight(delta) {
-    if (visibleTickets.length === 0)
-      return
-    var index = -1
-    for (var i = 0; i < visibleTickets.length; i++) {
-      if (String(visibleTickets[i].key || "") === highlightedKey) {
-        index = i
-        break
-      }
-    }
-    index = index === -1 ? (delta > 0 ? 0 : visibleTickets.length - 1) : index + delta
-    index = Math.max(0, Math.min(visibleTickets.length - 1, index))
-    highlightedKey = String(visibleTickets[index].key || "")
+    highlightedKey = Model.nextKey(visibleTickets, highlightedKey, delta)
   }
 
   function openTicket(key) {
@@ -181,9 +134,7 @@ Panel {
   function copyKey(key) {
     if (key === "")
       return
-    clipboard.text = key
-    clipboard.selectAll()
-    clipboard.copy()
+    clipboard.put(key)
     confirmedKey = key
     confirmation = qsTr("Copied ") + key
     confirmationTimer.restart()
@@ -259,15 +210,7 @@ Panel {
     }
   }
 
-  // Qt has no clipboard API outside Widgets, so an off-screen TextEdit is the
-  // usual way to reach it from a shell. It is never shown or focused.
-  TextEdit {
-    id: clipboard
-
-    visible: false
-    width: 0
-    height: 0
-  }
+  Clipboard { id: clipboard }
 
   BarIconButton {
     id: button
@@ -342,49 +285,19 @@ Panel {
           width: panelFlick.width
           spacing: Style.space(14)
 
-          PanelHero {
+          PanelHeader {
             width: parent.width
-            title: jira.site !== "" ? "Jira · " + jira.site : "Jira"
+            showingSettings: root.showSettings
+            loading: jira.loading
+            hasData: jira.hasData
+            state: jira.state
+            message: jira.message
+            site: jira.site
+            inProgressCount: jira.waitingCount
+            todoCount: jira.assignedCount
             foreground: root.foreground
             fontFamily: root.fontFamily
-            meta: {
-              if (root.showSettings)
-                return qsTr("Settings")
-              if (jira.loading && !jira.hasData)
-                return qsTr("Loading")
-              if (jira.state !== "ok")
-                return jira.message
-              return jira.waitingCount + qsTr(" in progress · ") + jira.assignedCount + qsTr(" to do")
-            }
-
-            // A gear to reach the settings page, and a back arrow to leave it.
-            // The comma key does the same thing without the mouse.
-            trailingControl: Component {
-              Rectangle {
-                // Sized as a button rather than as a glyph: the previous box
-                // was the size of the icon itself, which is a hard target to
-                // hit with a mouse.
-                width: Style.space(16)
-                height: Style.space(16)
-                radius: Style.cornerRadius
-                color: gearHover.hovered || root.showSettings
-                  ? Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.1)
-                  : "transparent"
-
-                HoverHandler { id: gearHover }
-                TapHandler { onTapped: root.showSettings = !root.showSettings }
-
-                Text {
-                  id: gearLabel
-
-                  anchors.centerIn: parent
-                  text: root.showSettings ? "\uf053" : "\uf013"
-                  color: root.foreground
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.body
-                }
-              }
-            }
+            onSettingsToggled: root.showSettings = !root.showSettings
           }
 
           SprintBars {
@@ -422,36 +335,13 @@ Panel {
             }
           }
 
-          TicketList {
+          TicketSections {
             width: parent.width
-            title: qsTr("IN PROGRESS")
-            tickets: root.waitingRows
-            highlightedKey: root.highlightedKey
-            confirmedKey: root.confirmedKey
-            confirmation: root.confirmation
-            foreground: root.foreground
-            fontFamily: root.fontFamily
-            onTicketActivated: function (key) { root.openTicket(key) }
-            onTicketKeyRequested: function (key) { root.copyKey(key) }
-          }
-
-          TicketList {
-            width: parent.width
-            title: qsTr("TO DO")
-            tickets: root.assignedRows
-            highlightedKey: root.highlightedKey
-            confirmedKey: root.confirmedKey
-            confirmation: root.confirmation
-            foreground: root.foreground
-            fontFamily: root.fontFamily
-            onTicketActivated: function (key) { root.openTicket(key) }
-            onTicketKeyRequested: function (key) { root.copyKey(key) }
-          }
-
-          TicketList {
-            width: parent.width
-            title: qsTr("RESULTS")
-            tickets: root.searchRows
+            visible: !root.showSettings
+            waitingRows: root.waitingRows
+            assignedRows: root.assignedRows
+            searchRows: root.searchRows
+            searchActive: root.searchActive
             highlightedKey: root.highlightedKey
             confirmedKey: root.confirmedKey
             confirmation: root.confirmation

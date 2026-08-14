@@ -51,30 +51,6 @@ test('groupTickets tolerates null and empty input', () => {
   assert.deepEqual(Model.groupTickets([]), { waiting: [], assigned: [] })
 })
 
-// ---- looksLikeIssueKey
-
-test('looksLikeIssueKey accepts real key shapes', () => {
-  assert.equal(Model.looksLikeIssueKey('DEMO-12'), true)
-  assert.equal(Model.looksLikeIssueKey('demo-12'), true)
-  assert.equal(Model.looksLikeIssueKey('ABC1-20'), true)
-  assert.equal(Model.looksLikeIssueKey('  DS-849  '), true)
-})
-
-test('looksLikeIssueKey rejects everything else', () => {
-  assert.equal(Model.looksLikeIssueKey('DEMO'), false)
-  assert.equal(Model.looksLikeIssueKey('849'), false)
-  assert.equal(Model.looksLikeIssueKey('DEMO-'), false)
-  assert.equal(Model.looksLikeIssueKey('-12'), false)
-  assert.equal(Model.looksLikeIssueKey('card limit'), false)
-  assert.equal(Model.looksLikeIssueKey(''), false)
-  assert.equal(Model.looksLikeIssueKey(null), false)
-})
-
-test('normalizeIssueKey uppercases and trims', () => {
-  assert.equal(Model.normalizeIssueKey('  demo-12 '), 'DEMO-12')
-  assert.equal(Model.normalizeIssueKey('not a key'), '')
-})
-
 // ---- relativeTime
 
 test('relativeTime renders each scale', () => {
@@ -96,6 +72,46 @@ test('relativeTime returns an empty string for unusable input', () => {
 test('relativeTime never renders a negative age', () => {
   const now = Date.parse('2026-08-14T12:00:00Z')
   assert.equal(Model.relativeTime('2026-08-14T13:00:00Z', now), 'just now')
+})
+
+// ---- decorateRows
+
+test('decorateRows stamps a relative age without touching the input', () => {
+  const now = Date.parse('2026-08-14T12:00:00Z')
+  const rows = [{ key: 'A-1', updated: '2026-08-14T09:00:00Z' }]
+  const decorated = Model.decorateRows(rows, now)
+  assert.equal(decorated[0].age, '3h ago')
+  assert.equal(decorated[0].key, 'A-1')
+  assert.equal(rows[0].age, undefined)
+})
+
+test('decorateRows tolerates null', () => {
+  assert.deepEqual(Model.decorateRows(null, Date.now()), [])
+})
+
+// ---- nextKey
+
+const ROWS = [{ key: 'A-1' }, { key: 'A-2' }, { key: 'A-3' }]
+
+test('nextKey walks the list', () => {
+  assert.equal(Model.nextKey(ROWS, 'A-1', 1), 'A-2')
+  assert.equal(Model.nextKey(ROWS, 'A-2', -1), 'A-1')
+})
+
+test('nextKey stops at the ends rather than wrapping', () => {
+  assert.equal(Model.nextKey(ROWS, 'A-3', 1), 'A-3')
+  assert.equal(Model.nextKey(ROWS, 'A-1', -1), 'A-1')
+})
+
+test('nextKey lands on an end when nothing is selected', () => {
+  // The first arrow press has to do something visible.
+  assert.equal(Model.nextKey(ROWS, '', 1), 'A-1')
+  assert.equal(Model.nextKey(ROWS, '', -1), 'A-3')
+})
+
+test('nextKey tolerates an empty list', () => {
+  assert.equal(Model.nextKey([], 'A-1', 1), '')
+  assert.equal(Model.nextKey(null, 'A-1', 1), '')
 })
 
 // ---- filterTickets
@@ -354,6 +370,25 @@ test('sprintBars marks where the clock stands on each work bar', () => {
   const bars = Model.sprintBars(SPRINT, ['time', 'tickets'], MIDPOINT)
   assert.equal(bars[0].mark, null)
   assert.equal(bars[1].mark, 50)
+})
+
+// ---- toggleDoneStatus
+
+test('toggleDoneStatus starts from what is drawn, not from nothing', () => {
+  // With no selection stored the pane draws Jira's done statuses as ticked, so
+  // the first click has to remove one of them rather than start a new list.
+  const defaults = ['Released', 'Done']
+  assert.deepEqual(Model.toggleDoneStatus([], 'Released', defaults), ['Done'])
+})
+
+test('toggleDoneStatus adds and removes from a real selection', () => {
+  assert.deepEqual(Model.toggleDoneStatus(['Released'], 'Ready to Merge', []), ['Released', 'Ready to Merge'])
+  assert.deepEqual(Model.toggleDoneStatus(['Released', 'Ready to Merge'], 'Released', []), ['Ready to Merge'])
+})
+
+test('toggleDoneStatus matches case insensitively and ignores a blank name', () => {
+  assert.deepEqual(Model.toggleDoneStatus(['Released'], 'released', []), [])
+  assert.deepEqual(Model.toggleDoneStatus(['Released'], '', []), ['Released'])
 })
 
 // ---- estimateCoverage

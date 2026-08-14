@@ -138,7 +138,29 @@ cmd_setup() {
   read -r -p "Account email: " email
   [[ -n ${email:-} ]] || die "an account email is required"
 
-  echo "Create an API token at $TOKEN_PAGE"
+  # Spelling the scopes out here matters more than it looks. A token created
+  # without the Jira Software ones still works for everything except reading
+  # boards, so the widget quietly falls back to deriving the sprint from the
+  # tickets and the user has no way to know why their sprint looks incomplete.
+  cat <<INSTRUCTIONS
+
+Create an API token at:
+  $TOKEN_PAGE
+
+Give it read access to Jira:
+  read:jira-work
+  read:jira-user
+
+And, to read sprints from the board, add the Jira Software app:
+  read:board-scope:jira-software
+  read:sprint:jira-software
+  read:issue-details:jira
+  read:jql:jira
+
+Without those four, sprints are read from your tickets instead, which cannot
+see a sprint that holds no ticket. Everything else works the same.
+
+INSTRUCTIONS
   read -r -s -p "API token (input hidden): " token
   echo
   [[ -n ${token:-} ]] || die "an API token is required"
