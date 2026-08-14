@@ -46,7 +46,7 @@ Column {
   }
 
   function showsBar(id) {
-    return sprintBars.indexOf(id.toUpperCase()) !== -1
+    return sprintBars.indexOf(String(id).toLowerCase()) !== -1
   }
 
   function isFollowed(key) {

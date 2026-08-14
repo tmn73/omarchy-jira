@@ -66,13 +66,7 @@ Panel {
   }
 
   function toggleSprintBar(id) {
-    var chosen = jira.sprintBarChoice.slice()
-    var at = chosen.indexOf(id.toUpperCase())
-    if (at === -1)
-      chosen.push(id)
-    else
-      chosen.splice(at, 1)
-    setSetting("sprintBars", chosen)
+    setSetting("sprintBars", Model.toggleSprintBar(jira.sprintBarChoice, id))
     jira.refresh()
   }
 

@@ -180,6 +180,43 @@ function withRemoteFlag(ticket, remote) {
   return copy
 }
 
+// Normalises a setting that holds a list of internal identifiers.
+//
+// Kept apart from projectList because the two normalise in opposite directions:
+// project keys are uppercase because that is how Jira writes them, while these
+// are internal names that nobody sees, and mixing the two conventions is how a
+// stored setting ends up reading ["TIME","TICKETS","points"].
+function idList(value) {
+  var raw = []
+  if (Array.isArray(value))
+    raw = value
+  else if (text(value) !== "")
+    raw = text(value).split(",")
+
+  var ids = []
+  for (var i = 0; i < raw.length; i++) {
+    var id = text(raw[i]).trim().toLowerCase()
+    if (id !== "" && ids.indexOf(id) === -1)
+      ids.push(id)
+  }
+  return ids
+}
+
+// Applies one click on a sprint bar checkbox.
+function toggleSprintBar(current, id) {
+  var chosen = idList(current)
+  var wanted = text(id).trim().toLowerCase()
+  if (wanted === "")
+    return chosen
+
+  var at = chosen.indexOf(wanted)
+  if (at === -1)
+    chosen.push(wanted)
+  else
+    chosen.splice(at, 1)
+  return chosen
+}
+
 // Normalises the followed-projects setting into a list of project keys.
 //
 // It accepts a list or a comma separated string, because the two ways of
@@ -353,13 +390,13 @@ function sprintBars(sprint, wanted, nowMs, doneStatuses) {
   if (!sprint)
     return []
 
-  var chosen = projectList(wanted)
+  var chosen = idList(wanted)
   var bars = []
   var now = isFinite(nowMs) ? nowMs : Date.now()
   var totals = sprintTotals(sprint, doneStatuses)
   var elapsedPercent = timePercent(sprint, now)
 
-  if (chosen.indexOf(SPRINT_BAR_TIME.toUpperCase()) !== -1 && elapsedPercent !== null) {
+  if (chosen.indexOf(SPRINT_BAR_TIME) !== -1 && elapsedPercent !== null) {
     bars.push({
       id: SPRINT_BAR_TIME,
       label: "time",
@@ -369,7 +406,7 @@ function sprintBars(sprint, wanted, nowMs, doneStatuses) {
     })
   }
 
-  if (chosen.indexOf(SPRINT_BAR_TICKETS.toUpperCase()) !== -1) {
+  if (chosen.indexOf(SPRINT_BAR_TICKETS) !== -1) {
     var ticketPercent = totals.total > 0 ? Math.round((totals.done / totals.total) * 100) : 0
     bars.push({
       id: SPRINT_BAR_TICKETS,
@@ -380,7 +417,7 @@ function sprintBars(sprint, wanted, nowMs, doneStatuses) {
     })
   }
 
-  if (chosen.indexOf(SPRINT_BAR_POINTS.toUpperCase()) !== -1) {
+  if (chosen.indexOf(SPRINT_BAR_POINTS) !== -1) {
     var pointPercent = totals.points.total > 0
       ? Math.round((totals.points.done / totals.points.total) * 100)
       : 0
@@ -466,6 +503,8 @@ if (typeof module !== "undefined" && module.exports) {
     toggleDoneStatus: toggleDoneStatus,
     estimateCoverage: estimateCoverage,
     projectList: projectList,
+    idList: idList,
+    toggleSprintBar: toggleSprintBar,
     toggleFollowedProject: toggleFollowedProject,
     limit: limit
   }

@@ -209,6 +209,31 @@ test('toggleFollowedProject normalises case and ignores a blank key', () => {
   assert.deepEqual(Model.toggleFollowedProject(['DS'], '', ALL), ['DS'])
 })
 
+// ---- idList and toggleSprintBar
+
+test('idList normalises to one convention', () => {
+  // The stored setting once read ["TIME","TICKETS","points"], because the
+  // comparison uppercased while the write did not.
+  assert.deepEqual(Model.idList(['TIME', 'TICKETS', 'points']), ['time', 'tickets', 'points'])
+  assert.deepEqual(Model.idList('time, tickets'), ['time', 'tickets'])
+  assert.deepEqual(Model.idList(['time', 'TIME']), ['time'])
+  assert.deepEqual(Model.idList(null), [])
+})
+
+test('toggleSprintBar adds and removes without changing case', () => {
+  assert.deepEqual(Model.toggleSprintBar(['time'], 'points'), ['time', 'points'])
+  assert.deepEqual(Model.toggleSprintBar(['time', 'points'], 'time'), ['points'])
+})
+
+test('toggleSprintBar cleans up a setting written by an older version', () => {
+  assert.deepEqual(Model.toggleSprintBar(['TIME', 'TICKETS'], 'points'),
+    ['time', 'tickets', 'points'])
+})
+
+test('toggleSprintBar can empty the list, which turns the section off', () => {
+  assert.deepEqual(Model.toggleSprintBar(['time'], 'time'), [])
+})
+
 // ---- filterByProject
 
 test('filterByProject drops projects that are not followed', () => {

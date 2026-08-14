@@ -82,7 +82,7 @@ Item {
   // Which sprint bars to draw. Empty means the section is off entirely, and the
   // helper is then never asked for a sprint, so teams that do not run sprints
   // pay nothing for the feature.
-  readonly property var sprintBarChoice: Model.projectList(setting("sprintBars", ["time", "tickets"]))
+  readonly property var sprintBarChoice: Model.idList(setting("sprintBars", ["time", "tickets"]))
   readonly property bool wantSprint: sprintBarChoice.length > 0
 
   // Which statuses this team calls finished. Empty means "whatever Jira calls
