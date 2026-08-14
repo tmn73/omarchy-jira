@@ -58,6 +58,13 @@ Rectangle {
     input.forceActiveFocus()
   }
 
+  // Empties the field without emitting a query, for when the panel closes.
+  function clear() {
+    debounce.stop()
+    input.text = ""
+    root.query = ""
+  }
+
   function submitOrActivate() {
     debounce.stop()
     root.activated()

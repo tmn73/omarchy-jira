@@ -66,16 +66,14 @@ Item {
     return Qt.resolvedUrl("omarchy-jira-fetch").toString().replace(/^file:\/\//, "")
   }
 
-  function followedProjects() {
-    var value = setting("followedProjects", [])
-    if (!Array.isArray(value))
-      return []
-    return value.filter(function (key) { return String(key || "") !== "" })
-  }
+  // Bound rather than computed on call: a binding that goes through a function
+  // does not reliably re-evaluate when `settings` is replaced, which is how the
+  // settings pane ended up drawing a selection the fetch had already moved past.
+  readonly property var followedProjects: Model.projectList(setting("followedProjects", []))
 
   function dashboardCommand() {
     var command = [helperPath(), "--max", String(maxDisplayedTickets * 2)]
-    var followed = followedProjects()
+    var followed = followedProjects
     if (followed.length > 0)
       command.push("--projects", followed.join(","))
     return command

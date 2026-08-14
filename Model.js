@@ -145,6 +145,94 @@ function withRemoteFlag(ticket, remote) {
   return copy
 }
 
+// Normalises the followed-projects setting into a list of project keys.
+//
+// It accepts a list or a comma separated string, because the two ways of
+// writing this setting produce different shapes: the settings pane stores a
+// list, while `omarchy bar set tmn73.jira followedProjects DS` stores a string.
+// A setting that only works when written one particular way is a trap.
+function projectList(value) {
+  var raw = []
+  if (Array.isArray(value))
+    raw = value
+  else if (text(value) !== "")
+    raw = text(value).split(",")
+
+  var keys = []
+  for (var i = 0; i < raw.length; i++) {
+    var key = text(raw[i]).trim().toUpperCase()
+    if (key !== "" && keys.indexOf(key) === -1)
+      keys.push(key)
+  }
+  return keys
+}
+
+// Applies one click on a project checkbox and returns the new selection.
+//
+// An empty selection means "every project", which is what a fresh install shows
+// and what the pane draws as every box ticked. Clicking a ticked box therefore
+// has to unticket it, not restart the selection from that one project: the
+// first click means "not this one", so it expands to every key except the one
+// clicked.
+//
+// A selection that ends up empty, or that ends up holding every project, is
+// stored as empty. Both mean the same thing, and a widget configured to show
+// nothing at all is never what someone wanted.
+function toggleFollowedProject(followed, key, allKeys) {
+  var current = projectList(followed)
+  var all = projectList(allKeys)
+  var wanted = text(key).trim().toUpperCase()
+  if (wanted === "")
+    return current
+
+  var next
+  if (current.length === 0) {
+    next = []
+    for (var i = 0; i < all.length; i++) {
+      if (all[i] !== wanted)
+        next.push(all[i])
+    }
+  } else {
+    var at = current.indexOf(wanted)
+    next = current.slice()
+    if (at === -1)
+      next.push(wanted)
+    else
+      next.splice(at, 1)
+  }
+
+  if (next.length === 0 || (all.length > 0 && next.length === all.length))
+    return []
+  return next
+}
+
+// Puts results from the projects someone follows first, without dropping the
+// rest.
+//
+// Excluding other projects outright would break the case search exists for: a
+// key pasted from chat has to open even when its project is not one you follow
+// day to day. Ranking gives the same first line as filtering would, and still
+// finds the other one.
+//
+// The sort is stable, so relevance order from Jira survives inside each group.
+function rankByProject(tickets, followed) {
+  var list = asArray(tickets)
+  var keys = asArray(followed)
+  if (keys.length === 0 || list.length === 0)
+    return list.slice()
+
+  var preferred = []
+  var others = []
+  for (var i = 0; i < list.length; i++) {
+    var ticket = list[i]
+    if (keys.indexOf(text(ticket && ticket.projectKey)) === -1)
+      others.push(ticket)
+    else
+      preferred.push(ticket)
+  }
+  return preferred.concat(others)
+}
+
 // Caps a rendered list. A cap that is missing, zero, or negative returns the
 // list untouched: a broken setting must never silently hide someone's work.
 function limit(tickets, max) {
@@ -163,6 +251,9 @@ if (typeof module !== "undefined" && module.exports) {
     relativeTime: relativeTime,
     filterTickets: filterTickets,
     mergeSearchResults: mergeSearchResults,
+    rankByProject: rankByProject,
+    projectList: projectList,
+    toggleFollowedProject: toggleFollowedProject,
     limit: limit
   }
 }

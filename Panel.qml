@@ -25,6 +25,38 @@ Panel {
   property string highlightedKey: ""
   property string confirmedKey: ""
   property string confirmation: ""
+  property bool showSettings: false
+
+  readonly property var followedProjects: jira.followedProjects
+
+  // Writes one widget setting back to shell.json.
+  //
+  // The value is applied locally first so the panel reacts on the click, and
+  // the shell write comes back through the bar as the same value. This is the
+  // only place in the plugin that persists anything.
+  function setSetting(name, value) {
+    var entry = { id: root.moduleName }
+    for (var key in root.settings) {
+      if (key !== "id")
+        entry[key] = root.settings[key]
+    }
+    entry[name] = value
+    root.settings = entry
+    if (root.bar && root.bar.shell && typeof root.bar.shell.updateEntryInline === "function")
+      root.bar.shell.updateEntryInline(root.moduleName, entry)
+  }
+
+  function allProjectKeys() {
+    var keys = []
+    for (var i = 0; i < jira.projects.length; i++)
+      keys.push(String(jira.projects[i].key || ""))
+    return keys
+  }
+
+  function toggleProject(key) {
+    setSetting("followedProjects", Model.toggleFollowedProject(followedProjects, key, allProjectKeys()))
+    jira.refresh()
+  }
 
   // The local filter follows the field itself, so matches among the tickets
   // already in memory appear on the keystroke. The remote results arrive later,
@@ -43,14 +75,16 @@ Panel {
   // same way they cross a row.
   readonly property var visibleTickets: {
     if (searchActive)
-      return Model.mergeSearchResults(Model.filterTickets(jira.tickets, searchField.query), jira.searchResults)
+      return Model.rankByProject(
+        Model.mergeSearchResults(Model.filterTickets(jira.tickets, searchField.query), jira.searchResults),
+        root.followedProjects)
     var groups = Model.groupTickets(jira.tickets)
     return Model.limit(groups.waiting, jira.maxDisplayedTickets)
       .concat(Model.limit(groups.assigned, jira.maxDisplayedTickets))
   }
-  readonly property var waitingRows: searchActive ? [] : decorate(Model.limit(Model.groupTickets(jira.tickets).waiting, jira.maxDisplayedTickets))
-  readonly property var assignedRows: searchActive ? [] : decorate(Model.limit(Model.groupTickets(jira.tickets).assigned, jira.maxDisplayedTickets))
-  readonly property var searchRows: searchActive ? decorate(visibleTickets) : []
+  readonly property var waitingRows: (showSettings || searchActive) ? [] : decorate(Model.limit(Model.groupTickets(jira.tickets).waiting, jira.maxDisplayedTickets))
+  readonly property var assignedRows: (showSettings || searchActive) ? [] : decorate(Model.limit(Model.groupTickets(jira.tickets).assigned, jira.maxDisplayedTickets))
+  readonly property var searchRows: (showSettings || !searchActive) ? [] : decorate(visibleTickets)
 
   // Relative ages are computed once per render pass rather than per row, and
   // stamped onto the copies the rows receive. Rows stay free of clock access.
@@ -124,6 +158,8 @@ Panel {
   onOpenedChanged: {
     if (opened) {
       highlightedKey = ""
+      showSettings = false
+      searchField.clear()
       jira.clearSearch()
       jira.refresh()
       if (panelFlick)
@@ -152,7 +188,13 @@ Panel {
     // so the search path can be exercised without a keyboard.
     function search(query: string): string {
       root.open()
+      root.showSettings = false
       searchField.setQuery(query)
+      return "ok"
+    }
+    function settings(): string {
+      root.open()
+      root.showSettings = true
       return "ok"
     }
   }
@@ -229,6 +271,8 @@ Panel {
           Qt.callLater(function () { searchField.focusInput() })
         else if (key === "y")
           root.copyKey(root.highlightedKey)
+        else if (key === ",")
+          root.showSettings = !root.showSettings
       }
 
       Flickable {
@@ -255,11 +299,42 @@ Panel {
             foreground: root.foreground
             fontFamily: root.fontFamily
             meta: {
+              if (root.showSettings)
+                return qsTr("Settings")
               if (jira.loading && !jira.hasData)
                 return qsTr("Loading")
               if (jira.state !== "ok")
                 return jira.message
               return jira.waitingCount + qsTr(" in progress · ") + jira.assignedCount + qsTr(" to do")
+            }
+
+            // A gear to reach the settings page, and a back arrow to leave it.
+            // The comma key does the same thing without the mouse.
+            trailingControl: Component {
+              Rectangle {
+                // Sized as a button rather than as a glyph: the previous box
+                // was the size of the icon itself, which is a hard target to
+                // hit with a mouse.
+                width: Style.space(16)
+                height: Style.space(16)
+                radius: Style.cornerRadius
+                color: gearHover.hovered || root.showSettings
+                  ? Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.1)
+                  : "transparent"
+
+                HoverHandler { id: gearHover }
+                TapHandler { onTapped: root.showSettings = !root.showSettings }
+
+                Text {
+                  id: gearLabel
+
+                  anchors.centerIn: parent
+                  text: root.showSettings ? "\uf053" : "\uf013"
+                  color: root.foreground
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.body
+                }
+              }
             }
           }
 
@@ -267,6 +342,7 @@ Panel {
             id: searchField
 
             width: parent.width
+            visible: !root.showSettings
             busy: jira.searching
             foreground: root.foreground
             fontFamily: root.fontFamily
@@ -328,7 +404,7 @@ Panel {
 
           StateNotice {
             width: parent.width
-            visible: root.visibleTickets.length === 0
+            visible: !root.showSettings && root.visibleTickets.length === 0
             state: {
               if (root.searching)
                 return "searching"
@@ -342,6 +418,23 @@ Panel {
             searchActive: root.searchActive
             foreground: root.foreground
             fontFamily: root.fontFamily
+          }
+
+          SettingsView {
+            width: parent.width
+            visible: root.showSettings
+            projects: jira.projects
+            followedProjects: root.followedProjects
+            site: jira.site
+            account: jira.account
+            state: jira.state
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+            onProjectToggled: function (key) { root.toggleProject(key) }
+            onAllProjectsCleared: {
+              root.setSetting("followedProjects", [])
+              jira.refresh()
+            }
           }
         }
       }

@@ -140,6 +140,92 @@ test('mergeSearchResults tolerates missing sides', () => {
   assert.equal(Model.mergeSearchResults(null, [{ key: 'A-1' }]).length, 1)
 })
 
+// ---- projectList
+
+test('projectList accepts a list', () => {
+  assert.deepEqual(Model.projectList(['DS', 'HUB']), ['DS', 'HUB'])
+})
+
+test('projectList accepts a comma separated string', () => {
+  // This is the shape `omarchy bar set` writes.
+  assert.deepEqual(Model.projectList('DS,HUB'), ['DS', 'HUB'])
+  assert.deepEqual(Model.projectList('DS, HUB'), ['DS', 'HUB'])
+  assert.deepEqual(Model.projectList('DS'), ['DS'])
+})
+
+test('projectList normalises case and drops blanks and duplicates', () => {
+  assert.deepEqual(Model.projectList('ds, ,DS,hub'), ['DS', 'HUB'])
+  assert.deepEqual(Model.projectList(['', '  ']), [])
+})
+
+test('projectList treats nothing as no filter', () => {
+  assert.deepEqual(Model.projectList(null), [])
+  assert.deepEqual(Model.projectList(''), [])
+  assert.deepEqual(Model.projectList([]), [])
+})
+
+// ---- toggleFollowedProject
+
+const ALL = ['ADMIN', 'DS', 'HUB', 'OPS']
+
+test('unticking one box from the default keeps every other project', () => {
+  // Nothing followed means everything is shown and every box is drawn ticked,
+  // so the first click has to read as "not this one".
+  assert.deepEqual(Model.toggleFollowedProject([], 'ADMIN', ALL), ['DS', 'HUB', 'OPS'])
+})
+
+test('ticking and unticking a box from a real selection', () => {
+  assert.deepEqual(Model.toggleFollowedProject(['DS'], 'HUB', ALL), ['DS', 'HUB'])
+  assert.deepEqual(Model.toggleFollowedProject(['DS', 'HUB'], 'DS', ALL), ['HUB'])
+})
+
+test('unticking the last box falls back to showing everything', () => {
+  // A widget configured to show nothing is never what someone meant.
+  assert.deepEqual(Model.toggleFollowedProject(['DS'], 'DS', ALL), [])
+})
+
+test('ticking the last missing box is stored as no filter', () => {
+  assert.deepEqual(Model.toggleFollowedProject(['DS', 'HUB', 'OPS'], 'ADMIN', ALL), [])
+})
+
+test('toggleFollowedProject normalises case and ignores a blank key', () => {
+  assert.deepEqual(Model.toggleFollowedProject(['DS'], 'hub', ALL), ['DS', 'HUB'])
+  assert.deepEqual(Model.toggleFollowedProject(['DS'], '', ALL), ['DS'])
+})
+
+// ---- rankByProject
+
+test('rankByProject puts followed projects first without dropping the rest', () => {
+  const results = [
+    { key: 'DES-1069', projectKey: 'DES' },
+    { key: 'DS-1069', projectKey: 'DS' },
+    { key: 'HUB-3', projectKey: 'HUB' }
+  ]
+  const ranked = Model.rankByProject(results, ['DS'])
+  assert.deepEqual(ranked.map(t => t.key), ['DS-1069', 'DES-1069', 'HUB-3'])
+})
+
+test('rankByProject keeps relevance order inside each group', () => {
+  const results = [
+    { key: 'DES-1', projectKey: 'DES' },
+    { key: 'DS-2', projectKey: 'DS' },
+    { key: 'DES-3', projectKey: 'DES' },
+    { key: 'DS-4', projectKey: 'DS' }
+  ]
+  const ranked = Model.rankByProject(results, ['DS'])
+  assert.deepEqual(ranked.map(t => t.key), ['DS-2', 'DS-4', 'DES-1', 'DES-3'])
+})
+
+test('rankByProject leaves the list alone when nothing is followed', () => {
+  const results = [{ key: 'B-1', projectKey: 'B' }, { key: 'A-1', projectKey: 'A' }]
+  assert.deepEqual(Model.rankByProject(results, []).map(t => t.key), ['B-1', 'A-1'])
+  assert.deepEqual(Model.rankByProject(results, null).map(t => t.key), ['B-1', 'A-1'])
+})
+
+test('rankByProject tolerates null tickets', () => {
+  assert.deepEqual(Model.rankByProject(null, ['DS']), [])
+})
+
 // ---- limit
 
 test('limit caps the list', () => {
