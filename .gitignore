@@ -2,3 +2,6 @@ node_modules/
 __pycache__/
 *.pyc
 .venv/
+
+# Design notes and plans stay local, see ~/dev/omarchy-jira-notes
+docs/
