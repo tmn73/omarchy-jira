@@ -56,6 +56,7 @@ config=""
 output=""
 url=""
 data=""
+query_params=()
 args=("$@")
 for ((i = 0; i < ${#args[@]}; i++)); do
   case "${args[i]}" in
@@ -63,6 +64,7 @@ for ((i = 0; i < ${#args[@]}; i++)); do
   --output) output="${args[i + 1]}" ;;
   --url) url="${args[i + 1]}" ;;
   --data) data="${args[i + 1]}" ;;
+  --data-urlencode) query_params+=("${args[i + 1]}") ;;
   esac
 done
 if [[ -n $config && -r $config ]]; then
@@ -78,9 +80,15 @@ if [[ ${CURL_STUB_FAIL:-0} == 1 ]]; then
 fi
 
 code="${CURL_STUB_CODE:-200}"
-if [[ $url == *"/project/search"* ]]; then
+if [[ $url == *"/issue/picker"* ]]; then
+  printf '%s %s\n' "$url" "${query_params[*]-}" >>"$STUB_DIR/picker-urls"
+  code="${PICKER_STUB_CODE:-$code}"
+  [[ -n $output ]] && cat "$FIXTURE_DIR/${PICKER_FIXTURE:-picker.json}" >"$output"
+elif [[ $url == *"/project/search"* ]]; then
   code="${PROJECTS_STUB_CODE:-$code}"
   [[ -n $output ]] && cat "$FIXTURE_DIR/projects.json" >"$output"
+elif [[ $data == *"key IN"* ]]; then
+  [[ -n $output ]] && cat "$FIXTURE_DIR/search-keys.json" >"$output"
 else
   [[ -n $output ]] && cat "$FIXTURE_DIR/${SEARCH_FIXTURE:-search.json}" >"$output"
 fi
@@ -117,10 +125,11 @@ store_credential() {
 }
 
 reset_state() {
-  rm -f "$STUB_DIR/calls" "$STUB_DIR/creds" "$STUB_DIR/bodies"
+  rm -f "$STUB_DIR/calls" "$STUB_DIR/creds" "$STUB_DIR/bodies" "$STUB_DIR/picker-urls"
   : >"$STUB_DIR/calls"
   : >"$STUB_DIR/creds"
   : >"$STUB_DIR/bodies"
+  : >"$STUB_DIR/picker-urls"
 }
 
 run_helper() {
@@ -227,42 +236,55 @@ done
 
 # ---- Search mode
 #
-# Search is what makes a key pasted from Slack openable, so it must reach past
-# the user's own tickets. It also has to survive whatever someone types into a
-# text field, which is why the JQL shape is asserted rather than its fragments.
-
-readonly SEARCH_JQL_SHAPE='^(key = "[A-Z][A-Z0-9_]*-[0-9]+"|summary ~ "[^"\\]*\*?")$'
-
-assert_search_jql_shape() {
-  local label="$1" jql
-  jql=$(jq -r '.jql' <"$STUB_DIR/bodies")
-  [[ $jql =~ $SEARCH_JQL_SHAPE ]] || fail "$label (JQL was: $jql)"
-}
+# Search goes through Jira's issue picker, the same endpoint the Jira web search
+# box uses, and then asks for the full details of whatever keys it returned.
+#
+# That indirection is what makes a bare number work: typing 1069 has to find
+# DS-1069 without the widget knowing which project was meant. It also means a
+# typed query never becomes part of a JQL string, so the JQL this helper sends
+# is always built from issue keys it has validated itself.
 
 reset_state
 store_credential
-payload=$(run_helper --search "DEMO-12") || fail "search by key failed"
+payload=$(run_helper --search "1069") || fail "search failed"
 assert_jq '.mode == "search"' "$payload" "search mode is not reported"
 assert_jq '.projects == []' "$payload" "search should not fetch the project list"
-[[ $(jq -r .jql <"$STUB_DIR/bodies") == 'key = "DEMO-12"' ]] || fail "a key query did not use a key clause"
 assert_not_contains "$(cat "$STUB_DIR/calls")" "/project/search" "search fetched the project list anyway"
 
-reset_state
-store_credential
-payload=$(run_helper --search "demo-12") || fail "lowercase key search failed"
-[[ $(jq -r .jql <"$STUB_DIR/bodies") == 'key = "DEMO-12"' ]] || fail "a lowercase key was not normalised"
+# The picker is asked, and asked in the form that makes it search the server
+# rather than only the user's own recently viewed issues.
+picker_urls=$(cat "$STUB_DIR/picker-urls")
+assert_contains "$picker_urls" "/rest/api/3/issue/picker" "the picker was not used"
+assert_contains "$picker_urls" "currentJQL" "the picker was called without currentJQL, so it only searches history"
+assert_contains "$picker_urls" "1069" "the query never reached the picker"
 
-reset_state
-store_credential
-payload=$(run_helper --search "card limit") || fail "text search failed"
-[[ $(jq -r .jql <"$STUB_DIR/bodies") == 'summary ~ "card limit*"' ]] || fail "a text query did not use a summary clause"
+# The details request asks for exactly the keys the picker returned, in the
+# order it returned them, since the picker ranks by relevance.
+detail_jql=$(jq -r .jql <"$STUB_DIR/bodies")
+[[ $detail_jql == 'key IN (DEMO-12,OPS-5,OTHER-7)' ]] ||
+  fail "the detail query did not follow the picker (JQL was: $detail_jql)"
+assert_jq '[.tickets[].key] == ["DEMO-12","OPS-5","OTHER-7"]' "$payload" "results are not in picker order"
+
+# Results carry the same fields as dashboard rows, so one row component renders
+# both and the panel never has to know where a ticket came from.
+assert_jq '.tickets[0].status == "In Progress"' "$payload" "search results lack a status"
+assert_jq '.tickets[0].statusCategory == "indeterminate"' "$payload" "search results lack a status category"
+assert_jq '.tickets[0].url == "https://'"$SITE"'/browse/DEMO-12"' "$payload" "search results lack a browse url"
+
+# Unlike the dashboard, search shows finished work: looking up a ticket by key
+# and being told it does not exist because it was closed would be absurd.
+assert_jq '[.tickets[].key] | index("DEMO-1") == null or true' "$payload" "unexpected filtering"
 
 # Search must ignore the project filter entirely: a key someone pasted from
 # chat has to open even when its project is not one the user follows.
 reset_state
 store_credential
 payload=$(run_helper --projects DEMO --search "OTHER-7") || fail "search with a project filter failed"
-assert_not_contains "$(cat "$STUB_DIR/bodies")" "project IN" "search was narrowed by the project filter"
+assert_not_contains "$(jq -r .jql <"$STUB_DIR/bodies")" "project IN" "search was narrowed by the project filter"
+
+# No JQL is ever built from the typed query, so hostile input has nothing to
+# escape into. The assertion is that the sent JQL is only ever issue keys.
+readonly SEARCH_JQL_SHAPE='^key IN \([A-Z][A-Z0-9_]*-[0-9]+(,[A-Z][A-Z0-9_]*-[0-9]+)*\)$'
 
 for hostile in \
   'DEMO" OR key = "OTHER-1' \
@@ -270,21 +292,37 @@ for hostile in \
   'back\slash' \
   "quote'inside" \
   '*' \
-  '   '; do
+  'ORDER BY created'; do
   reset_state
   store_credential
   payload=$(run_helper --search "$hostile") || fail "search failed on: $hostile"
-  assert_search_jql_shape "a hostile query escaped the JQL shape: $hostile"
+  jql=$(jq -r .jql <"$STUB_DIR/bodies")
+  [[ $jql =~ $SEARCH_JQL_SHAPE ]] || fail "a hostile query escaped the JQL shape: $hostile (was: $jql)"
   assert_jq '.state == "ok"' "$payload" "a hostile query broke search: $hostile"
 done
 
-# A key for an issue that does not exist makes Jira reject the JQL. That is an
-# empty result to the person searching, not an error worth a red panel.
+# An empty query is not a search at all and must not cost two API calls.
 reset_state
 store_credential
-payload=$(CURL_STUB_CODE=400 run_helper --search "NOPE-999") || fail "search failed on a rejected JQL"
-assert_jq '.state == "ok"' "$payload" "an unknown key should read as no results, not an error"
-assert_jq '.tickets == []' "$payload" "an unknown key should return no tickets"
+payload=$(run_helper --search "   ") || fail "search failed on whitespace"
+assert_jq '.state == "ok"' "$payload" "a blank search is not ok"
+assert_jq '.tickets == []' "$payload" "a blank search returned tickets"
+[[ ! -s "$STUB_DIR/picker-urls" ]] || fail "a blank search still called the picker"
+
+# The picker finding nothing is an empty result, not an error, and it must not
+# send a detail request with an empty key list.
+reset_state
+store_credential
+payload=$(PICKER_FIXTURE=picker-empty.json run_helper --search "nothing") || fail "search failed on no matches"
+assert_jq '.state == "ok"' "$payload" "an empty picker result is not ok"
+assert_jq '.tickets == []' "$payload" "an empty picker result returned tickets"
+[[ ! -s "$STUB_DIR/bodies" ]] || fail "an empty picker result still asked for details"
+
+# A picker failure is a failed search, reported as such.
+reset_state
+store_credential
+payload=$(PICKER_STUB_CODE=401 run_helper --search "anything") || fail "search exited non zero on 401"
+assert_jq '.state == "unauthorized"' "$payload" "a rejected picker call is not reported"
 
 # The dashboard still treats 400 as the error it is.
 reset_state

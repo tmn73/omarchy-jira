@@ -21,6 +21,7 @@ readonly DEFAULT_MAX=100
 
 mode="dashboard"
 search_query=""
+matched_keys=""
 projects_filter=""
 max_results="$DEFAULT_MAX"
 
@@ -74,6 +75,29 @@ emit() {
   exit 0
 }
 
+# The successful-but-empty payload. Kept separate from emit() so that an empty
+# result never has to borrow an error state to say "nothing here".
+emit_results() {
+  local site="$2" account="$3"
+  jq -n \
+    --argjson schema "$SCHEMA_VERSION" \
+    --arg mode "$mode" \
+    --arg site "$site" \
+    --arg account "$account" \
+    '{
+      schema: $schema,
+      mode: $mode,
+      generatedAt: (now | todate),
+      state: "ok",
+      message: "",
+      site: $site,
+      account: $account,
+      tickets: [],
+      projects: []
+    }'
+  exit 0
+}
+
 # A project key is uppercase letters and digits starting with a letter. Anything
 # else is dropped rather than escaped, because a key is not free text and a
 # malformed one has no business reaching a JQL clause.
@@ -97,27 +121,73 @@ build_jql() {
   printf '%s ORDER BY updated DESC' "$clause"
 }
 
+trim() {
+  local value="$1"
+  value="${value#"${value%%[![:space:]]*}"}"
+  printf '%s' "${value%"${value##*[![:space:]]}"}"
+}
+
 # Search deliberately ignores the project filter. Someone pasting a key from
 # chat needs it to open whether or not they follow that project day to day.
 #
-# A query shaped like an issue key looks the issue up directly; anything else is
-# treated as free text. The text is stripped of the two characters that could
-# end a JQL string rather than escaped, because a backslash or a quote inside a
-# ticket title search is never what someone meant, and stripping cannot be got
-# subtly wrong the way escaping can.
-build_search_jql() {
-  local query="$1" trimmed
-  trimmed="${query#"${query%%[![:space:]]*}"}"
-  trimmed="${trimmed%"${trimmed##*[![:space:]]}"}"
+# The query goes to Jira's issue picker, which is what the search box in Jira
+# itself uses. That is the only endpoint that resolves a bare number: typing
+# 1069 has to find DS-1069 without this widget guessing the project, and no JQL
+# expression can express that. currentJQL is required, since without it the
+# picker only offers issues the user has recently viewed.
+#
+# The typed query therefore never becomes part of a JQL string. What comes back
+# is a list of issue keys, each validated here before it is used, so the JQL
+# this helper sends is built entirely from values it produced itself.
+PICKER_FILE=""
+MATCHED_KEYS=""
+search_keys() {
+  local query="$1" status=0 http_code key
+  PICKER_FILE=$(mktemp)
 
-  if [[ $trimmed =~ ^[A-Za-z][A-Za-z0-9_]*-[0-9]+$ ]]; then
-    printf 'key = "%s"' "${trimmed^^}"
-    return
+  status=0
+  http_code=$(api_request "$account" "$token" "$base/rest/api/3/issue/picker" "$PICKER_FILE" \
+    --get --data-urlencode "query=$query" --data-urlencode "currentJQL=order by created DESC") || status=$?
+
+  if ((status != 0)); then
+    rm -f "$PICKER_FILE"
+    emit "network-error" "Could not reach $site." "$site" "$account"
   fi
 
-  local safe="${trimmed//\\/}"
-  safe="${safe//\"/}"
-  printf 'summary ~ "%s*"' "$safe"
+  case "$http_code" in
+  200) ;;
+  401)
+    rm -f "$PICKER_FILE"
+    emit "unauthorized" "Jira rejected the stored token. Run omarchy-jira-auth to reconnect." "$site" "$account"
+    ;;
+  403)
+    rm -f "$PICKER_FILE"
+    emit "forbidden" "This account is not permitted to search those issues." "$site" "$account"
+    ;;
+  *)
+    rm -f "$PICKER_FILE"
+    emit "error" "Jira answered $http_code." "$site" "$account"
+    ;;
+  esac
+
+  # The picker ranks by relevance and repeats an issue across its sections, so
+  # deduplication has to keep first occurrence rather than sort, which is why it
+  # happens here instead of through jq's `unique`.
+  local keys=()
+  local -A seen=()
+  while IFS= read -r key; do
+    [[ $key =~ ^[A-Za-z][A-Za-z0-9_]*-[0-9]+$ ]] || continue
+    key="${key^^}"
+    [[ -n ${seen[$key]:-} ]] && continue
+    seen[$key]=1
+    keys+=("$key")
+  done < <(jq -r '.sections[]?.issues[]?.key // empty' <"$PICKER_FILE" 2>/dev/null || true)
+
+  rm -f "$PICKER_FILE"
+  PICKER_FILE=""
+
+  local IFS=,
+  MATCHED_KEYS="${keys[*]-}"
 }
 
 # Performs one authenticated request and writes the body to a file. The
@@ -236,7 +306,23 @@ fi
 
 SEARCH_FILE=$(mktemp)
 if [[ $mode == "search" ]]; then
-  jql=$(build_search_jql "$search_query")
+  trimmed_query=$(trim "$search_query")
+  # A blank query is not a search, and must not cost a round trip.
+  if [[ -z $trimmed_query ]]; then
+    emit_results "" "$site" "$account"
+  fi
+
+  # Called plainly, never in a substitution: search_keys can raise a terminal
+  # state, and exit inside $(...) would only end the subshell.
+  search_keys "$trimmed_query"
+  matched_keys="$MATCHED_KEYS"
+  # Nothing matched. Asking for the details of an empty key list would be both
+  # wasteful and invalid JQL.
+  if [[ -z $matched_keys ]]; then
+    emit_results "" "$site" "$account"
+  fi
+
+  jql="key IN ($matched_keys)"
 else
   jql=$(build_jql)
 fi
@@ -289,6 +375,12 @@ if [[ $mode != "search" ]]; then
   fi
 fi
 
+# The picker's ranking, as JSON, or an empty list outside search mode.
+order_json='[]'
+if [[ -n $matched_keys ]]; then
+  order_json=$(printf '%s' "$matched_keys" | jq -R 'split(",")')
+fi
+
 jq -n \
   --argjson schema "$SCHEMA_VERSION" \
   --arg mode "$mode" \
@@ -296,6 +388,7 @@ jq -n \
   --arg account "$account" \
   --slurpfile search "$SEARCH_FILE" \
   --slurpfile projects "$PROJECTS_FILE" \
+  --argjson order "$order_json" \
   '{
     schema: $schema,
     mode: $mode,
@@ -306,7 +399,7 @@ jq -n \
     account: $account,
     tickets: [
       ($search[0].issues // [])[]
-      | select(.fields.status.statusCategory.key != "done")
+      | select($mode == "search" or .fields.status.statusCategory.key != "done")
       | {
           key: .key,
           summary: (.fields.summary // ""),
@@ -323,4 +416,9 @@ jq -n \
       ($projects[0].values // [])[]
       | { key: .key, name: (.name // .key) }
     ]
-  }'
+  }
+  # Jira returns matched issues in its own order, but the picker ranked them by
+  # relevance, and that ranking is the useful one for a search box.
+  | if $order == [] then . else
+      .tickets |= sort_by(.key as $k | ($order | index($k)) // 9999)
+    end'

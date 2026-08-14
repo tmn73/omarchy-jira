@@ -1,0 +1,35 @@
+{
+  "isLast": true,
+  "issues": [
+    {
+      "key": "OTHER-7",
+      "fields": {
+        "summary": "A ticket in a project the user does not follow",
+        "updated": "2026-08-01T10:00:00.000-0500",
+        "issuetype": { "name": "Task" },
+        "status": { "name": "To Do", "statusCategory": { "key": "new", "name": "To Do" } },
+        "project": { "key": "OTHER", "name": "Other Project" }
+      }
+    },
+    {
+      "key": "DEMO-12",
+      "fields": {
+        "summary": "Card limit is not refreshed after a room change",
+        "updated": "2026-08-14T06:24:20.095-0500",
+        "issuetype": { "name": "Story" },
+        "status": { "name": "In Progress", "statusCategory": { "key": "indeterminate", "name": "In Progress" } },
+        "project": { "key": "DEMO", "name": "Demo Project" }
+      }
+    },
+    {
+      "key": "OPS-5",
+      "fields": {
+        "summary": "Duplicate group members are created without warning",
+        "updated": "2026-05-02T09:15:00.000-0500",
+        "issuetype": { "name": "Bug" },
+        "status": { "name": "To Do", "statusCategory": { "key": "new", "name": "To Do" } },
+        "project": { "key": "OPS", "name": "Operations" }
+      }
+    }
+  ]
+}

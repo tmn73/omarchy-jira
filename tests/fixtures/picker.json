@@ -1,0 +1,24 @@
+{
+  "sections": [
+    {
+      "label": "History Search",
+      "sub": "",
+      "id": "hs",
+      "msg": "",
+      "issues": [
+        { "key": "DEMO-12", "keyHtml": "DEMO-12", "summaryText": "Card limit is not refreshed after a room change" }
+      ]
+    },
+    {
+      "label": "Current Search",
+      "sub": "",
+      "id": "cs",
+      "msg": "",
+      "issues": [
+        { "key": "OPS-5", "keyHtml": "OPS-5", "summaryText": "Duplicate group members are created without warning" },
+        { "key": "DEMO-12", "keyHtml": "DEMO-12", "summaryText": "Card limit is not refreshed after a room change" },
+        { "key": "OTHER-7", "keyHtml": "OTHER-7", "summaryText": "A ticket in a project the user does not follow" }
+      ]
+    }
+  ]
+}
