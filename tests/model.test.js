@@ -140,25 +140,6 @@ test('mergeSearchResults tolerates missing sides', () => {
   assert.equal(Model.mergeSearchResults(null, [{ key: 'A-1' }]).length, 1)
 })
 
-// ---- barCount
-
-test('barCount follows the configured mode', () => {
-  assert.equal(Model.barCount(TICKETS, 'In progress'), 2)
-  assert.equal(Model.barCount(TICKETS, 'All assigned'), 4)
-  assert.equal(Model.barCount(TICKETS, 'None'), 0)
-})
-
-test('barCount falls back to the in-progress count for an unknown mode', () => {
-  // Covers settings written by an older version, which used other wording.
-  assert.equal(Model.barCount(TICKETS, 'nonsense'), 2)
-  assert.equal(Model.barCount(TICKETS, 'Waiting on you'), 2)
-  assert.equal(Model.barCount(TICKETS, ''), 2)
-})
-
-test('barCount tolerates null', () => {
-  assert.equal(Model.barCount(null, 'All assigned'), 0)
-})
-
 // ---- limit
 
 test('limit caps the list', () => {

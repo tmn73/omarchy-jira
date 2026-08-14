@@ -145,22 +145,6 @@ function withRemoteFlag(ticket, remote) {
   return copy
 }
 
-// The number next to the bar icon. Counting work in progress is the default
-// because a count that only moves when something changes is a count people keep
-// reading, unlike a total that sits still for weeks.
-//
-// The mode is matched loosely and falls back to the in-progress count, so a
-// setting written by an older version of this plugin keeps working.
-function barCount(tickets, mode) {
-  var groups = groupTickets(tickets)
-  var chosen = text(mode)
-  if (chosen === "None")
-    return 0
-  if (chosen === "All assigned")
-    return groups.waiting.length + groups.assigned.length
-  return groups.waiting.length
-}
-
 // Caps a rendered list. A cap that is missing, zero, or negative returns the
 // list untouched: a broken setting must never silently hide someone's work.
 function limit(tickets, max) {
@@ -179,7 +163,6 @@ if (typeof module !== "undefined" && module.exports) {
     relativeTime: relativeTime,
     filterTickets: filterTickets,
     mergeSearchResults: mergeSearchResults,
-    barCount: barCount,
     limit: limit
   }
 }

@@ -35,7 +35,16 @@ Item {
   readonly property var groups: Model.groupTickets(tickets)
   readonly property int waitingCount: groups.waiting.length
   readonly property int assignedCount: groups.assigned.length
-  readonly property int barCount: Model.barCount(tickets, String(setting("barCount", "Waiting on you")))
+  // The bar asks two questions of this service and no more: is something wrong,
+  // and what should the tooltip say.
+  readonly property bool needsAttention: state !== "ok" && state !== "loading"
+  readonly property string tooltip: {
+    if (state === "loading")
+      return qsTr("Jira")
+    if (state !== "ok")
+      return message !== "" ? message : qsTr("Jira is unavailable")
+    return waitingCount + qsTr(" in progress, ") + assignedCount + qsTr(" to do")
+  }
   readonly property int maxDisplayedTickets: intSetting("maxDisplayedTickets", 25, 5, 100)
   readonly property int refreshIntervalSec: intSetting("refreshIntervalSec", 900, 60, 3600)
   readonly property bool connected: state === "ok"

@@ -169,11 +169,16 @@ Panel {
 
     anchors.fill: parent
     bar: root.bar
-    // The count goes in the button's own text rather than in a child item:
-    // WidgetButton renders its glyph from `text`, and an added child covers it.
-    // Hidden at zero, so a quiet day leaves a quiet bar.
-    text: jira.barCount > 0 ? "\ue75c " + jira.barCount : "\ue75c"
-    active: jira.barCount > 0
+    // The glyph alone, with no count. A number next to the icon would widen the
+    // button and throw off the optical centring BarIconButton does for a single
+    // glyph, and having work in progress is the normal state of a working day,
+    // not something to announce in the bar.
+    text: "\ue75c"
+    // Red is reserved for the widget being unable to do its job: an expired
+    // token, a locked keyring, an unreachable Jira. Having tickets is not an
+    // alarm, and an icon that is always lit stops meaning anything.
+    active: jira.needsAttention
+    tooltipText: jira.tooltip
     onPressed: function (buttonCode) {
       if (buttonCode === Qt.RightButton || buttonCode === Qt.MiddleButton)
         jira.refresh()

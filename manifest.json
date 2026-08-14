@@ -27,8 +27,7 @@
     "defaultSection": "right",
     "defaults": {
       "refreshIntervalSec": 900,
-      "maxDisplayedTickets": 25,
-      "barCount": "In progress"
+      "maxDisplayedTickets": 25
     },
     "schema": [
       {
@@ -48,18 +47,6 @@
         "max": 100,
         "step": 5,
         "defaultValue": 25
-      },
-      {
-        "key": "barCount",
-        "type": "enum",
-        "label": "Bar counter",
-        "options": [
-          "In progress",
-          "All assigned",
-          "None"
-        ],
-        "defaultValue": "In progress",
-        "description": "Which tickets the number next to the bar icon counts. It is hidden entirely when the count is zero."
       }
     ]
   }
