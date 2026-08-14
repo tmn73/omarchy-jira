@@ -80,13 +80,28 @@ if [[ ${CURL_STUB_FAIL:-0} == 1 ]]; then
 fi
 
 code="${CURL_STUB_CODE:-200}"
-if [[ $url == *"/issue/picker"* ]]; then
+if [[ $url == *"/rest/api/3/field"* ]]; then
+  code="${FIELDS_STUB_CODE:-$code}"
+  [[ -n $output ]] && cat "$FIXTURE_DIR/fields.json" >"$output"
+elif [[ $url == *"/issue/picker"* ]]; then
   printf '%s %s\n' "$url" "${query_params[*]-}" >>"$STUB_DIR/picker-urls"
   code="${PICKER_STUB_CODE:-$code}"
   [[ -n $output ]] && cat "$FIXTURE_DIR/${PICKER_FIXTURE:-picker.json}" >"$output"
 elif [[ $url == *"/project/search"* ]]; then
   code="${PROJECTS_STUB_CODE:-$code}"
   [[ -n $output ]] && cat "$FIXTURE_DIR/projects.json" >"$output"
+elif [[ $url == *"/rest/agile/1.0/board/"*"/sprint/"*"/issue"* ]]; then
+  code="${SPRINT_ISSUES_STUB_CODE:-$code}"
+  [[ -n $output ]] && cat "$FIXTURE_DIR/sprint-issues.json" >"$output"
+elif [[ $url == *"/rest/agile/1.0/board/"*"/sprint"* ]]; then
+  code="${SPRINTS_STUB_CODE:-$code}"
+  [[ -n $output ]] && cat "$FIXTURE_DIR/${SPRINTS_FIXTURE:-sprints.json}" >"$output"
+elif [[ $url == *"/rest/agile/1.0/board"* ]]; then
+  code="${BOARDS_STUB_CODE:-$code}"
+  [[ -n $output ]] && cat "$FIXTURE_DIR/${BOARDS_FIXTURE:-boards.json}" >"$output"
+elif [[ $data == *"openSprints()"* ]]; then
+  code="${DERIVED_STUB_CODE:-$code}"
+  [[ -n $output ]] && cat "$FIXTURE_DIR/sprint-derived.json" >"$output"
 elif [[ $data == *"key IN"* ]]; then
   [[ -n $output ]] && cat "$FIXTURE_DIR/search-keys.json" >"$output"
 else
@@ -233,6 +248,111 @@ for hostile in \
   assert_jql_shape "a hostile project list escaped the JQL shape: $hostile"
   assert_jq '.state == "ok"' "$payload" "a hostile project list broke the dashboard: $hostile"
 done
+
+# ---- Sprint
+#
+# The sprint comes from the Agile API, which knows about boards. Reading it out
+# of the tickets instead would have avoided extra token scopes, but a sprint
+# with no ticket in a followed project would then be invisible, and a sprint
+# that has just opened is exactly the one worth showing.
+
+reset_state
+store_credential
+payload=$(run_helper --projects DEMO --sprint) || fail "helper failed with a sprint"
+
+assert_jq '.sprint != null' "$payload" "no sprint in the payload"
+assert_jq '.sprint.name == "Demo Sprint 12"' "$payload" "sprint name missing"
+assert_jq '.sprint.goal == "Ship the rollout"' "$payload" "sprint goal missing"
+assert_jq '.sprint.startDate | test("^2026-08-05")' "$payload" "sprint start date missing"
+assert_jq '.sprint.endDate | test("^2026-08-19")' "$payload" "sprint end date missing"
+assert_jq '.sprint.total == 4' "$payload" "sprint ticket total is wrong"
+assert_jq '.sprint.done == 2' "$payload" "sprint done count is wrong"
+
+# Both measures travel in the payload, so choosing between them is a display
+# decision. The estimated count is what makes that choice an informed one:
+# counting points is misleading when most tickets carry no estimate.
+assert_jq '.sprint.points.total == 13' "$payload" "sprint point total is wrong"
+assert_jq '.sprint.points.done == 8' "$payload" "sprint point done is wrong"
+assert_jq '.sprint.points.estimated == 3' "$payload" "sprint estimated count is wrong"
+
+# A scrum board is picked over a kanban one: kanban boards have no sprints.
+assert_contains "$(cat "$STUB_DIR/calls")" "/rest/agile/1.0/board/293/sprint" "the scrum board was not chosen"
+
+# Only the active sprint is asked for.
+assert_contains "$(cat "$STUB_DIR/calls")" "state=active" "sprints were not filtered to the active one"
+
+# ---- The sprint needs a project to know which board to read
+
+reset_state
+store_credential
+payload=$(run_helper --sprint) || fail "helper failed with no project selected"
+assert_jq '.sprint == null' "$payload" "a sprint was reported without a project to attach it to"
+assert_jq '.sprintState == "no-project"' "$payload" "the reason for having no sprint is not reported"
+assert_not_contains "$(cat "$STUB_DIR/calls")" "/rest/agile/" "the agile API was called without a project"
+
+# ---- A token without Jira Software scopes still gets a sprint
+#
+# The Agile API needs scopes a plain Jira token does not carry. Rather than
+# showing nothing, the helper reads the sprint off the tickets that are in it.
+# The result is marked "derived" because it cannot see a sprint that holds no
+# ticket, and the panel is entitled to know that.
+
+reset_state
+store_credential
+payload=$(BOARDS_STUB_CODE=401 run_helper --projects DEMO --sprint) || fail "helper failed on a scope error"
+assert_jq '.state == "ok"' "$payload" "a sprint scope error broke the whole payload"
+assert_jq '.tickets | length == 4' "$payload" "a sprint scope error lost the tickets"
+assert_jq '.sprintState == "derived"' "$payload" "the fallback was not used"
+assert_jq '.sprint.name == "Demo Sprint 12"' "$payload" "the fallback found no sprint"
+assert_jq '.sprint.total == 3' "$payload" "the fallback counted the wrong number of tickets"
+assert_jq '.sprint.done == 1' "$payload" "the fallback counted the wrong number of done tickets"
+assert_jq '.sprint.points.total == 8' "$payload" "the fallback summed the wrong points"
+assert_jq '.sprint.name != "Demo Sprint 11"' "$payload" "the fallback used a closed sprint"
+
+# When even the fallback cannot run, the tickets still arrive.
+reset_state
+store_credential
+payload=$(BOARDS_STUB_CODE=401 DERIVED_STUB_CODE=500 run_helper --projects DEMO --sprint) ||
+  fail "helper failed when both sprint paths failed"
+assert_jq '.state == "ok"' "$payload" "a total sprint failure broke the payload"
+assert_jq '.tickets | length == 4' "$payload" "a total sprint failure lost the tickets"
+assert_jq '.sprint == null' "$payload" "a total sprint failure should yield no sprint"
+
+# ---- Everything else about the sprint fails quietly
+
+reset_state
+store_credential
+payload=$(BOARDS_FIXTURE=boards-none.json run_helper --projects DEMO --sprint) || fail "helper failed with no board"
+assert_jq '.sprint == null' "$payload" "no board should yield no sprint"
+assert_jq '.sprintState == "no-board"' "$payload" "a missing board is not reported"
+
+reset_state
+store_credential
+payload=$(SPRINTS_FIXTURE=sprints-none.json run_helper --projects DEMO --sprint) || fail "helper failed with no active sprint"
+assert_jq '.sprint == null' "$payload" "no active sprint should yield no sprint"
+assert_jq '.sprintState == "none"' "$payload" "a board without an active sprint is not reported"
+
+reset_state
+store_credential
+payload=$(SPRINT_ISSUES_STUB_CODE=500 run_helper --projects DEMO --sprint) || fail "helper failed when sprint issues failed"
+assert_jq '.state == "ok"' "$payload" "a sprint issue failure broke the payload"
+assert_jq '.tickets | length == 4' "$payload" "a sprint issue failure lost the tickets"
+
+# ---- Teams that do not run sprints pay nothing for the feature
+
+reset_state
+store_credential
+payload=$(run_helper --projects DEMO) || fail "helper failed without --sprint"
+assert_jq '.sprint == null' "$payload" "the sprint was fetched without being asked for"
+assert_not_contains "$(cat "$STUB_DIR/calls")" "/rest/agile/" "the agile API was called without being asked for"
+assert_not_contains "$(cat "$STUB_DIR/calls")" "/rest/api/3/field" "the field catalogue was fetched without being asked for"
+
+# Search has no business asking about sprints.
+reset_state
+store_credential
+payload=$(run_helper --sprint --search "card") || fail "search failed"
+assert_not_contains "$(cat "$STUB_DIR/calls")" "/rest/agile/" "search asked for the sprint"
+assert_jq '.sprint == null' "$payload" "search should carry no sprint"
 
 # ---- Search mode
 #

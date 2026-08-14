@@ -1,0 +1,12 @@
+{
+  "isLast": true,
+  "issues": [
+    { "key": "DEMO-12", "fields": { "status": { "statusCategory": { "key": "indeterminate" } }, "customfield_10016": 5,
+      "customfield_10020": [ { "id": 835, "name": "Demo Sprint 12", "state": "active", "startDate": "2026-08-05T16:10:05.255Z", "endDate": "2026-08-19T18:15:00.000Z", "goal": "Ship the rollout" } ] } },
+    { "key": "DEMO-11", "fields": { "status": { "statusCategory": { "key": "done" } }, "customfield_10016": 3,
+      "customfield_10020": [ { "id": 835, "name": "Demo Sprint 12", "state": "active", "startDate": "2026-08-05T16:10:05.255Z", "endDate": "2026-08-19T18:15:00.000Z" } ] } },
+    { "key": "DEMO-9", "fields": { "status": { "statusCategory": { "key": "new" } },
+      "customfield_10020": [ { "id": 800, "name": "Demo Sprint 11", "state": "closed", "endDate": "2026-08-05T18:15:00.000Z" },
+                             { "id": 835, "name": "Demo Sprint 12", "state": "active", "startDate": "2026-08-05T16:10:05.255Z", "endDate": "2026-08-19T18:15:00.000Z" } ] } }
+  ]
+}

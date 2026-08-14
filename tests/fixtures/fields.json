@@ -1,0 +1,7 @@
+[
+  { "id": "summary", "name": "Summary", "custom": false },
+  { "id": "customfield_10020", "name": "Sprint", "custom": true, "schema": { "type": "array", "custom": "com.pyxis.greenhopper.jira:gh-sprint" } },
+  { "id": "customfield_10104", "name": "Story Points", "custom": true, "schema": { "type": "number" } },
+  { "id": "customfield_10016", "name": "Story point estimate", "custom": true, "schema": { "type": "number" } },
+  { "id": "workratio", "name": "Work Ratio", "custom": false, "schema": { "type": "number" } }
+]

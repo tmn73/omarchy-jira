@@ -1,0 +1,16 @@
+{
+  "maxResults": 50,
+  "startAt": 0,
+  "isLast": true,
+  "values": [
+    {
+      "id": 835,
+      "state": "active",
+      "name": "Demo Sprint 12",
+      "startDate": "2026-08-05T16:10:05.255Z",
+      "endDate": "2026-08-19T18:15:00.000Z",
+      "originBoardId": 293,
+      "goal": "Ship the rollout"
+    }
+  ]
+}

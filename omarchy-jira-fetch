@@ -22,6 +22,7 @@ readonly DEFAULT_MAX=100
 mode="dashboard"
 search_query=""
 matched_keys=""
+want_sprint=0
 projects_filter=""
 max_results="$DEFAULT_MAX"
 
@@ -45,6 +46,7 @@ connect a site.
 
   --projects  Restrict the dashboard to these project keys
   --search    Search the whole site by issue key or summary
+  --sprint    Also report the active sprint and its progress
   --max       Maximum tickets to request, 1 to 100 (default 100)
   --help      Show this message
 USAGE
@@ -70,7 +72,9 @@ emit() {
       site: $site,
       account: $account,
       tickets: [],
-      projects: []
+      projects: [],
+      sprint: null,
+      sprintState: "off"
     }'
   exit 0
 }
@@ -93,7 +97,9 @@ emit_results() {
       site: $site,
       account: $account,
       tickets: [],
-      projects: []
+      projects: [],
+      sprint: null,
+      sprintState: "off"
     }'
   exit 0
 }
@@ -198,6 +204,237 @@ search_keys() {
   MATCHED_KEYS="${keys[*]-}"
 }
 
+# Finds the story point fields.
+#
+# Sites commonly define more than one, "Story Points" and "Story point
+# estimate" being the usual pair, and fill only one of them. Picking the first
+# match would report zero points on a sprint that is fully estimated, so every
+# candidate is collected and each ticket contributes its first non null value.
+POINTS_FIELDS="[]"
+SPRINT_FIELD=""
+FIELDS_DISCOVERED=0
+discover_fields() {
+  ((FIELDS_DISCOVERED == 0)) || return 0
+  FIELDS_DISCOVERED=1
+  local file status=0 http_code
+  file=$(mktemp)
+
+  http_code=$(api_request "$account" "$token" "$base/rest/api/3/field" "$file") || status=$?
+  if ((status != 0)) || [[ $http_code != 200 ]] || ! jq -e . >/dev/null 2>&1 <"$file"; then
+    rm -f "$file"
+    return 0
+  fi
+
+  POINTS_FIELDS=$(jq -c '[.[] | select((.name // "") | ascii_downcase | test("story point")) | .id] | .[0:4]' <"$file")
+  [[ -n $POINTS_FIELDS ]] || POINTS_FIELDS="[]"
+
+  # The sprint field carries the Greenhopper schema on every site, which is a
+  # steadier signal than its display name.
+  SPRINT_FIELD=$(jq -r 'map(select((.schema.custom // "") | test("gh-sprint"))) | .[0].id // empty' <"$file")
+  if [[ -z $SPRINT_FIELD ]]; then
+    SPRINT_FIELD=$(jq -r 'map(select((.name // "") == "Sprint")) | .[0].id // empty' <"$file")
+  fi
+  rm -f "$file"
+}
+
+# Reads the active sprint through the Agile API.
+#
+# This asks the board rather than inferring the sprint from the tickets. It
+# costs extra token scopes, but a sprint that has just opened, before anything
+# has been pulled into it, is exactly the one worth seeing, and inference cannot
+# show it.
+#
+# SPRINT_STATE explains an absent sprint so the panel can distinguish "you have
+# not picked a project" from "your token cannot read boards" from "there is no
+# sprint running", which are three different things to do about it.
+SPRINT_JSON="null"
+SPRINT_STATE="off"
+
+# Performs one Agile GET and leaves the body in AGILE_FILE. Returns the HTTP
+# status in AGILE_CODE, or 0 for a transport failure.
+AGILE_FILE=""
+AGILE_CODE=""
+agile_get() {
+  local path="$1" status=0
+  AGILE_FILE=$(mktemp)
+  AGILE_CODE=$(api_request "$account" "$token" "$base$path" "$AGILE_FILE") || status=$?
+  if ((status != 0)); then
+    AGILE_CODE="0"
+  fi
+}
+
+# Reads the active sprint from the tickets themselves.
+#
+# Every ticket carries the sprints it belongs to, so the active one can be
+# recovered without board access. The limit is real: a sprint holding no ticket
+# in the selected project is invisible this way, and so is one whose tickets the
+# user cannot see. It is a fallback for tokens without Jira Software scopes, not
+# a replacement.
+fetch_sprint_from_issues() {
+  local file status=0 http_code jql body fields
+
+  discover_fields
+  if [[ -z $SPRINT_FIELD ]]; then
+    SPRINT_STATE="forbidden"
+    return 0
+  fi
+
+  file=$(mktemp)
+  jql="project IN ($projects_filter) AND sprint in openSprints()"
+  fields=$(printf '%s' "$POINTS_FIELDS" | jq -c --arg sprint "$SPRINT_FIELD" '["status", $sprint] + .')
+  body=$(jq -nc --arg jql "$jql" --argjson fields "$fields" '{jql: $jql, maxResults: 200, fields: $fields}')
+
+  http_code=$(api_request "$account" "$token" "$base/rest/api/3/search/jql" "$file" \
+    --header 'Content-Type: application/json' --request POST --data "$body") || status=$?
+
+  if ((status != 0)) || [[ $http_code != 200 ]] || ! jq -e . >/dev/null 2>&1 <"$file"; then
+    rm -f "$file"
+    SPRINT_STATE="forbidden"
+    return 0
+  fi
+
+  SPRINT_JSON=$(jq -c --arg sprint "$SPRINT_FIELD" --argjson points "$POINTS_FIELDS" '
+    [.issues[]? | . as $issue
+      | (($issue.fields[$sprint] // []) | map(select(.state == "active")) | .[0]) as $active
+      | select($active != null)
+      | {
+          sprint: $active,
+          done: (($issue.fields.status.statusCategory.key // "") == "done"),
+          estimate: ([$points[] | $issue.fields[.]] | map(select(. != null)) | .[0])
+        }
+    ] as $rows
+    | if ($rows | length) == 0 then null else
+        ($rows[0].sprint) as $s
+        | {
+            name: ($s.name // ""), goal: ($s.goal // ""),
+            startDate: ($s.startDate // ""), endDate: ($s.endDate // ""),
+            total: ($rows | length),
+            done: ([$rows[] | select(.done)] | length),
+            points: {
+              total: ([$rows[] | .estimate // 0] | add // 0),
+              done: ([$rows[] | select(.done) | .estimate // 0] | add // 0),
+              estimated: ([$rows[] | select(.estimate != null)] | length)
+            }
+          }
+      end' <"$file")
+  rm -f "$file"
+
+  if [[ -z $SPRINT_JSON || $SPRINT_JSON == "null" ]]; then
+    SPRINT_JSON="null"
+    SPRINT_STATE="none"
+  else
+    SPRINT_STATE="derived"
+  fi
+}
+
+fetch_sprint() {
+  local board_id sprint_id sprint_meta
+
+  # Without a chosen project there is no board to read, and picking one for the
+  # user would be guessing which team they care about.
+  if [[ -z $projects_filter ]]; then
+    SPRINT_STATE="no-project"
+    return 0
+  fi
+
+  local project="${projects_filter%%,*}"
+
+  agile_get "/rest/agile/1.0/board?projectKeyOrId=$project&maxResults=50"
+  if [[ $AGILE_CODE == 401 || $AGILE_CODE == 403 ]]; then
+    rm -f "$AGILE_FILE"
+    # The Agile API needs Jira Software scopes that a plain Jira token does not
+    # carry. Rather than showing nothing, fall back to reading the sprint off
+    # the tickets, which any read:jira-work token can do. It cannot see a sprint
+    # that holds no ticket, which is why it is the fallback and not the default.
+    fetch_sprint_from_issues
+    return 0
+  fi
+  if [[ $AGILE_CODE != 200 ]] || ! jq -e . >/dev/null 2>&1 <"$AGILE_FILE"; then
+    rm -f "$AGILE_FILE"
+    SPRINT_STATE="unavailable"
+    return 0
+  fi
+
+  # Kanban boards have no sprints, so a scrum board is preferred when a project
+  # has both.
+  board_id=$(jq -r '(.values // []) | (map(select(.type == "scrum")) + .) | .[0].id // empty' <"$AGILE_FILE")
+  rm -f "$AGILE_FILE"
+  if [[ -z $board_id ]]; then
+    SPRINT_STATE="no-board"
+    return 0
+  fi
+
+  agile_get "/rest/agile/1.0/board/$board_id/sprint?state=active&maxResults=50"
+  if [[ $AGILE_CODE == 401 || $AGILE_CODE == 403 ]]; then
+    rm -f "$AGILE_FILE"
+    fetch_sprint_from_issues
+    return 0
+  fi
+  if [[ $AGILE_CODE != 200 ]] || ! jq -e . >/dev/null 2>&1 <"$AGILE_FILE"; then
+    rm -f "$AGILE_FILE"
+    SPRINT_STATE="unavailable"
+    return 0
+  fi
+
+  sprint_meta=$(jq -c '(.values // []) | .[0] // empty' <"$AGILE_FILE")
+  rm -f "$AGILE_FILE"
+  if [[ -z $sprint_meta ]]; then
+    SPRINT_STATE="none"
+    return 0
+  fi
+
+  sprint_id=$(printf '%s' "$sprint_meta" | jq -r '.id // empty')
+  if [[ -z $sprint_id ]]; then
+    SPRINT_STATE="none"
+    return 0
+  fi
+
+  discover_fields
+
+  local fields
+  fields=$(printf '%s' "$POINTS_FIELDS" | jq -r '["status"] + . | join(",")')
+
+  agile_get "/rest/agile/1.0/board/$board_id/sprint/$sprint_id/issue?maxResults=200&fields=$fields"
+  if [[ $AGILE_CODE != 200 ]] || ! jq -e . >/dev/null 2>&1 <"$AGILE_FILE"; then
+    rm -f "$AGILE_FILE"
+    # The sprint exists and its dates are worth showing even when its contents
+    # could not be counted.
+    SPRINT_JSON=$(printf '%s' "$sprint_meta" | jq -c '{
+      name: (.name // ""), goal: (.goal // ""),
+      startDate: (.startDate // ""), endDate: (.endDate // ""),
+      total: 0, done: 0, points: { total: 0, done: 0, estimated: 0 }
+    }')
+    SPRINT_STATE="partial"
+    return 0
+  fi
+
+  SPRINT_JSON=$(jq -c \
+    --argjson meta "$sprint_meta" \
+    --argjson points "$POINTS_FIELDS" \
+    '
+    [.issues[]? | . as $issue | {
+      done: (($issue.fields.status.statusCategory.key // "") == "done"),
+      estimate: ([$points[] | $issue.fields[.]] | map(select(. != null)) | .[0])
+    }] as $rows
+    | {
+        name: ($meta.name // ""),
+        goal: ($meta.goal // ""),
+        startDate: ($meta.startDate // ""),
+        endDate: ($meta.endDate // ""),
+        total: ($rows | length),
+        done: ([$rows[] | select(.done)] | length),
+        points: {
+          total: ([$rows[] | .estimate // 0] | add // 0),
+          done: ([$rows[] | select(.done) | .estimate // 0] | add // 0),
+          estimated: ([$rows[] | select(.estimate != null)] | length)
+        }
+      }
+    ' <"$AGILE_FILE")
+  rm -f "$AGILE_FILE"
+  [[ -n $SPRINT_JSON ]] || SPRINT_JSON="null"
+  SPRINT_STATE="ok"
+}
+
 # Performs one authenticated request and writes the body to a file. The
 # credentials go through a config file on a pipe, never through an argument,
 # since anything in argv is readable by every process on this machine.
@@ -261,6 +498,10 @@ while (($# > 0)); do
     mode="search"
     search_query="${2:-}"
     shift 2
+    ;;
+  --sprint)
+    want_sprint=1
+    shift
     ;;
   --max)
     max_results="${2:-$DEFAULT_MAX}"
@@ -373,6 +614,10 @@ jq -e . >/dev/null 2>&1 <"$SEARCH_FILE" ||
 PROJECTS_FILE=$(mktemp)
 printf '{"values":[]}' >"$PROJECTS_FILE"
 projects_status=0
+if [[ $mode != "search" && $want_sprint == 1 ]]; then
+  fetch_sprint
+fi
+
 if [[ $mode != "search" ]]; then
   projects_code=$(api_request "$account" "$token" \
     "$base/rest/api/3/project/search?maxResults=50" "$PROJECTS_FILE") || projects_status=$?
@@ -397,6 +642,8 @@ jq -n \
   --slurpfile search "$SEARCH_FILE" \
   --slurpfile projects "$PROJECTS_FILE" \
   --argjson order "$order_json" \
+  --argjson sprint "$SPRINT_JSON" \
+  --arg sprintState "$SPRINT_STATE" \
   '{
     schema: $schema,
     mode: $mode,
@@ -423,7 +670,9 @@ jq -n \
     projects: [
       ($projects[0].values // [])[]
       | { key: .key, name: (.name // .key) }
-    ]
+    ],
+    sprint: $sprint,
+    sprintState: $sprintState
   }
   # Jira returns matched issues in its own order, but the picker ranked them by
   # relevance, and that ranking is the useful one for a search box.

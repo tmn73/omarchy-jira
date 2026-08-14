@@ -1,0 +1,12 @@
+{
+  "expand": "schema,names",
+  "startAt": 0,
+  "maxResults": 200,
+  "total": 4,
+  "issues": [
+    { "key": "DEMO-12", "fields": { "status": { "name": "In Progress", "statusCategory": { "key": "indeterminate" } }, "customfield_10016": 5 } },
+    { "key": "DEMO-11", "fields": { "status": { "name": "Done", "statusCategory": { "key": "done" } }, "customfield_10016": 3 } },
+    { "key": "DEMO-10", "fields": { "status": { "name": "Released", "statusCategory": { "key": "done" } }, "customfield_10016": 5 } },
+    { "key": "DEMO-9", "fields": { "status": { "name": "To Do", "statusCategory": { "key": "new" } } } }
+  ]
+}

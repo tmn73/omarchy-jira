@@ -18,6 +18,7 @@ var MINUTE = 60
 var HOUR = 3600
 var DAY = 86400
 var MONTH = 2592000
+var MS_PER_DAY = 86400000
 
 function asArray(value) {
   return Array.isArray(value) ? value : []
@@ -224,6 +225,91 @@ function filterByProject(tickets, followed) {
   return kept
 }
 
+var SPRINT_BAR_TIME = "time"
+var SPRINT_BAR_TICKETS = "tickets"
+var SPRINT_BAR_POINTS = "points"
+
+// Turns the raw sprint counts into the bars the panel draws.
+//
+// The percentages are kept next to each other on purpose: a completion bar
+// alone says nothing, and it is the gap between work done and time spent that
+// tells you whether a sprint is on track.
+//
+// Nothing here invents a number. A sprint with no estimated ticket reports zero
+// points rather than falling back to counting tickets and calling them points.
+function sprintBars(sprint, wanted, nowMs) {
+  if (!sprint)
+    return []
+
+  var chosen = projectList(wanted)
+  var bars = []
+  var now = isFinite(nowMs) ? nowMs : Date.now()
+
+  if (chosen.indexOf(SPRINT_BAR_TIME.toUpperCase()) !== -1) {
+    var start = Date.parse(text(sprint.startDate))
+    var end = Date.parse(text(sprint.endDate))
+    if (isFinite(start) && isFinite(end) && end > start) {
+      var elapsed = Math.min(Math.max(now - start, 0), end - start)
+      bars.push({
+        id: SPRINT_BAR_TIME,
+        label: "time",
+        percent: Math.round((elapsed / (end - start)) * 100),
+        detail: daysLeftLabel(end, now)
+      })
+    }
+  }
+
+  if (chosen.indexOf(SPRINT_BAR_TICKETS.toUpperCase()) !== -1) {
+    var total = Number(sprint.total) || 0
+    var done = Number(sprint.done) || 0
+    bars.push({
+      id: SPRINT_BAR_TICKETS,
+      label: "tickets",
+      percent: total > 0 ? Math.round((done / total) * 100) : 0,
+      detail: done + "/" + total
+    })
+  }
+
+  if (chosen.indexOf(SPRINT_BAR_POINTS.toUpperCase()) !== -1) {
+    var points = sprint.points || {}
+    var pointsTotal = Number(points.total) || 0
+    var pointsDone = Number(points.done) || 0
+    bars.push({
+      id: SPRINT_BAR_POINTS,
+      label: "points",
+      percent: pointsTotal > 0 ? Math.round((pointsDone / pointsTotal) * 100) : 0,
+      detail: pointsDone + "/" + pointsTotal
+    })
+  }
+
+  return bars
+}
+
+function daysLeftLabel(endMs, nowMs) {
+  var remaining = endMs - nowMs
+  if (remaining <= 0)
+    return "ended"
+  var days = Math.ceil(remaining / MS_PER_DAY)
+  if (days === 1)
+    return "1d left"
+  return days + "d left"
+}
+
+// How much of a sprint carries an estimate, as a sentence the settings pane can
+// show. Counting points is misleading when most tickets have none, and the only
+// honest way to offer that choice is to say so where it is made.
+function estimateCoverage(sprint) {
+  if (!sprint)
+    return ""
+  var total = Number(sprint.total) || 0
+  var estimated = Number((sprint.points || {}).estimated) || 0
+  if (total === 0)
+    return ""
+  if (estimated === total)
+    return "every ticket is estimated"
+  return estimated + " of " + total + " tickets estimated"
+}
+
 // Caps a rendered list. A cap that is missing, zero, or negative returns the
 // list untouched: a broken setting must never silently hide someone's work.
 function limit(tickets, max) {
@@ -243,6 +329,8 @@ if (typeof module !== "undefined" && module.exports) {
     filterTickets: filterTickets,
     mergeSearchResults: mergeSearchResults,
     filterByProject: filterByProject,
+    sprintBars: sprintBars,
+    estimateCoverage: estimateCoverage,
     projectList: projectList,
     toggleFollowedProject: toggleFollowedProject,
     limit: limit
