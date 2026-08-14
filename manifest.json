@@ -6,22 +6,29 @@
   "author": "tmn73",
   "license": "MIT",
   "description": "The Jira tickets waiting on you, with search across your whole site.",
-  "kinds": ["bar-widget"],
+  "kinds": [
+    "bar-widget"
+  ],
   "activation": "on-demand",
   "entryPoints": {
     "barWidget": "Panel.qml"
   },
   "barWidget": {
     "displayName": "Jira",
-    "description": "Tickets assigned to you, grouped by whether they are waiting on you, with search by issue key or summary.",
+    "description": "Tickets assigned to you, split into what is in progress and what is still to do, with search by issue key or summary across the whole site.",
     "category": "Development",
-    "aliases": ["jira", "atlassian", "tickets", "issues"],
+    "aliases": [
+      "jira",
+      "atlassian",
+      "tickets",
+      "issues"
+    ],
     "allowMultiple": false,
     "defaultSection": "right",
     "defaults": {
       "refreshIntervalSec": 900,
       "maxDisplayedTickets": 25,
-      "barCount": "Waiting on you"
+      "barCount": "In progress"
     },
     "schema": [
       {
@@ -46,8 +53,12 @@
         "key": "barCount",
         "type": "enum",
         "label": "Bar counter",
-        "options": ["Waiting on you", "All assigned", "None"],
-        "defaultValue": "Waiting on you",
+        "options": [
+          "In progress",
+          "All assigned",
+          "None"
+        ],
+        "defaultValue": "In progress",
         "description": "Which tickets the number next to the bar icon counts. It is hidden entirely when the count is zero."
       }
     ]

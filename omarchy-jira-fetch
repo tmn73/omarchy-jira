@@ -20,6 +20,7 @@ readonly SCHEMA_VERSION=1
 readonly DEFAULT_MAX=100
 
 mode="dashboard"
+search_query=""
 projects_filter=""
 max_results="$DEFAULT_MAX"
 
@@ -35,11 +36,14 @@ trap cleanup EXIT
 usage() {
   cat <<'USAGE'
 Usage: omarchy-jira-fetch [--projects KEY[,KEY...]] [--max N]
+       omarchy-jira-fetch --search QUERY
 
 Prints one JSON document describing the tickets assigned to the connected
-account. Run omarchy-jira-auth first to connect a site.
+account, or the tickets matching a search. Run omarchy-jira-auth first to
+connect a site.
 
   --projects  Restrict the dashboard to these project keys
+  --search    Search the whole site by issue key or summary
   --max       Maximum tickets to request, 1 to 100 (default 100)
   --help      Show this message
 USAGE
@@ -91,6 +95,29 @@ build_jql() {
     clause="$clause AND project IN ($projects_filter)"
   fi
   printf '%s ORDER BY updated DESC' "$clause"
+}
+
+# Search deliberately ignores the project filter. Someone pasting a key from
+# chat needs it to open whether or not they follow that project day to day.
+#
+# A query shaped like an issue key looks the issue up directly; anything else is
+# treated as free text. The text is stripped of the two characters that could
+# end a JQL string rather than escaped, because a backslash or a quote inside a
+# ticket title search is never what someone meant, and stripping cannot be got
+# subtly wrong the way escaping can.
+build_search_jql() {
+  local query="$1" trimmed
+  trimmed="${query#"${query%%[![:space:]]*}"}"
+  trimmed="${trimmed%"${trimmed##*[![:space:]]}"}"
+
+  if [[ $trimmed =~ ^[A-Za-z][A-Za-z0-9_]*-[0-9]+$ ]]; then
+    printf 'key = "%s"' "${trimmed^^}"
+    return
+  fi
+
+  local safe="${trimmed//\\/}"
+  safe="${safe//\"/}"
+  printf 'summary ~ "%s*"' "$safe"
 }
 
 # Performs one authenticated request and writes the body to a file. The
@@ -152,6 +179,11 @@ while (($# > 0)); do
     projects_filter=$(sanitize_projects "${2:-}")
     shift 2
     ;;
+  --search)
+    mode="search"
+    search_query="${2:-}"
+    shift 2
+    ;;
   --max)
     max_results="${2:-$DEFAULT_MAX}"
     [[ $max_results =~ ^[0-9]+$ ]] || {
@@ -203,7 +235,12 @@ if [[ -z $site || -z $account || -z $base || -z $token ]]; then
 fi
 
 SEARCH_FILE=$(mktemp)
-search_body=$(jq -nc --arg jql "$(build_jql)" --argjson max "$max_results" \
+if [[ $mode == "search" ]]; then
+  jql=$(build_search_jql "$search_query")
+else
+  jql=$(build_jql)
+fi
+search_body=$(jq -nc --arg jql "$jql" --argjson max "$max_results" \
   '{jql: $jql, maxResults: $max, fields: ["summary","status","issuetype","project","updated"]}')
 
 status=0
@@ -212,6 +249,13 @@ http_code=$(api_request "$account" "$token" "$base/rest/api/3/search/jql" "$SEAR
 
 if ((status != 0)); then
   emit "network-error" "Could not reach $site." "$site" "$account"
+fi
+
+# A search for a key that does not exist makes Jira reject the JQL outright.
+# To the person typing, that is simply no result, so it is not an error state.
+if [[ $mode == "search" && $http_code == 400 ]]; then
+  printf '{"issues":[]}' >"$SEARCH_FILE"
+  http_code=200
 fi
 
 case "$http_code" in
@@ -233,13 +277,16 @@ jq -e . >/dev/null 2>&1 <"$SEARCH_FILE" ||
 # The project list is a convenience for the settings pane. Losing it must never
 # cost the tickets, so it is fetched last and its failure is silent.
 PROJECTS_FILE=$(mktemp)
+printf '{"values":[]}' >"$PROJECTS_FILE"
 projects_status=0
-projects_code=$(api_request "$account" "$token" \
-  "$base/rest/api/3/project/search?maxResults=50" "$PROJECTS_FILE") || projects_status=$?
+if [[ $mode != "search" ]]; then
+  projects_code=$(api_request "$account" "$token" \
+    "$base/rest/api/3/project/search?maxResults=50" "$PROJECTS_FILE") || projects_status=$?
 
-if ((projects_status != 0)) || [[ $projects_code != 200 ]] ||
-  ! jq -e . >/dev/null 2>&1 <"$PROJECTS_FILE"; then
-  printf '{"values":[]}' >"$PROJECTS_FILE"
+  if ((projects_status != 0)) || [[ $projects_code != 200 ]] ||
+    ! jq -e . >/dev/null 2>&1 <"$PROJECTS_FILE"; then
+    printf '{"values":[]}' >"$PROJECTS_FILE"
+  fi
 fi
 
 jq -n \

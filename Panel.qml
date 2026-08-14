@@ -240,7 +240,7 @@ Panel {
                 return qsTr("Loading")
               if (jira.state !== "ok")
                 return jira.message
-              return jira.waitingCount + qsTr(" waiting · ") + jira.assignedCount + qsTr(" assigned")
+              return jira.waitingCount + qsTr(" in progress · ") + jira.assignedCount + qsTr(" to do")
             }
           }
 
@@ -260,7 +260,7 @@ Panel {
 
           TicketList {
             width: parent.width
-            title: qsTr("WAITING ON YOU")
+            title: qsTr("IN PROGRESS")
             tickets: root.waitingRows
             highlightedKey: root.highlightedKey
             confirmedKey: root.confirmedKey
@@ -273,7 +273,7 @@ Panel {
 
           TicketList {
             width: parent.width
-            title: qsTr("ASSIGNED")
+            title: qsTr("TO DO")
             tickets: root.assignedRows
             highlightedKey: root.highlightedKey
             confirmedKey: root.confirmedKey

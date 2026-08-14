@@ -225,6 +225,73 @@ for hostile in \
   assert_jq '.state == "ok"' "$payload" "a hostile project list broke the dashboard: $hostile"
 done
 
+# ---- Search mode
+#
+# Search is what makes a key pasted from Slack openable, so it must reach past
+# the user's own tickets. It also has to survive whatever someone types into a
+# text field, which is why the JQL shape is asserted rather than its fragments.
+
+readonly SEARCH_JQL_SHAPE='^(key = "[A-Z][A-Z0-9_]*-[0-9]+"|summary ~ "[^"\\]*\*?")$'
+
+assert_search_jql_shape() {
+  local label="$1" jql
+  jql=$(jq -r '.jql' <"$STUB_DIR/bodies")
+  [[ $jql =~ $SEARCH_JQL_SHAPE ]] || fail "$label (JQL was: $jql)"
+}
+
+reset_state
+store_credential
+payload=$(run_helper --search "DEMO-12") || fail "search by key failed"
+assert_jq '.mode == "search"' "$payload" "search mode is not reported"
+assert_jq '.projects == []' "$payload" "search should not fetch the project list"
+[[ $(jq -r .jql <"$STUB_DIR/bodies") == 'key = "DEMO-12"' ]] || fail "a key query did not use a key clause"
+assert_not_contains "$(cat "$STUB_DIR/calls")" "/project/search" "search fetched the project list anyway"
+
+reset_state
+store_credential
+payload=$(run_helper --search "demo-12") || fail "lowercase key search failed"
+[[ $(jq -r .jql <"$STUB_DIR/bodies") == 'key = "DEMO-12"' ]] || fail "a lowercase key was not normalised"
+
+reset_state
+store_credential
+payload=$(run_helper --search "card limit") || fail "text search failed"
+[[ $(jq -r .jql <"$STUB_DIR/bodies") == 'summary ~ "card limit*"' ]] || fail "a text query did not use a summary clause"
+
+# Search must ignore the project filter entirely: a key someone pasted from
+# chat has to open even when its project is not one the user follows.
+reset_state
+store_credential
+payload=$(run_helper --projects DEMO --search "OTHER-7") || fail "search with a project filter failed"
+assert_not_contains "$(cat "$STUB_DIR/bodies")" "project IN" "search was narrowed by the project filter"
+
+for hostile in \
+  'DEMO" OR key = "OTHER-1' \
+  'a\"b' \
+  'back\slash' \
+  "quote'inside" \
+  '*' \
+  '   '; do
+  reset_state
+  store_credential
+  payload=$(run_helper --search "$hostile") || fail "search failed on: $hostile"
+  assert_search_jql_shape "a hostile query escaped the JQL shape: $hostile"
+  assert_jq '.state == "ok"' "$payload" "a hostile query broke search: $hostile"
+done
+
+# A key for an issue that does not exist makes Jira reject the JQL. That is an
+# empty result to the person searching, not an error worth a red panel.
+reset_state
+store_credential
+payload=$(CURL_STUB_CODE=400 run_helper --search "NOPE-999") || fail "search failed on a rejected JQL"
+assert_jq '.state == "ok"' "$payload" "an unknown key should read as no results, not an error"
+assert_jq '.tickets == []' "$payload" "an unknown key should return no tickets"
+
+# The dashboard still treats 400 as the error it is.
+reset_state
+store_credential
+payload=$(CURL_STUB_CODE=400 run_helper) || fail "dashboard failed on 400"
+assert_jq '.state == "error"' "$payload" "the dashboard should still report a 400"
+
 # ---- No credential
 
 reset_state

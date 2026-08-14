@@ -145,14 +145,18 @@ function withRemoteFlag(ticket, remote) {
   return copy
 }
 
-// The number next to the bar icon. "Waiting on you" is the default because a
-// count that only moves when something needs doing is a count people keep
-// reading, unlike a total that never changes.
+// The number next to the bar icon. Counting work in progress is the default
+// because a count that only moves when something changes is a count people keep
+// reading, unlike a total that sits still for weeks.
+//
+// The mode is matched loosely and falls back to the in-progress count, so a
+// setting written by an older version of this plugin keeps working.
 function barCount(tickets, mode) {
   var groups = groupTickets(tickets)
-  if (text(mode) === "None")
+  var chosen = text(mode)
+  if (chosen === "None")
     return 0
-  if (text(mode) === "All assigned")
+  if (chosen === "All assigned")
     return groups.waiting.length + groups.assigned.length
   return groups.waiting.length
 }
