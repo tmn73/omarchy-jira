@@ -251,7 +251,6 @@ test('sprintBars reports time and work side by side', () => {
   const bars = Model.sprintBars(SPRINT, ['time', 'tickets'], MIDPOINT)
   assert.deepEqual(bars.map(b => b.id), ['time', 'tickets'])
   assert.equal(bars[0].percent, 50)
-  assert.equal(bars[0].detail, '7d left')
   // 15 + 5 + 4 tickets in the done category.
   assert.equal(bars[1].percent, 59)
   assert.equal(bars[1].detail, '24/41')
@@ -322,7 +321,6 @@ test('sprintBars never reports negative or overrun time', () => {
   const after = Date.parse('2026-09-01T00:00:00.000Z')
   assert.equal(Model.sprintBars(SPRINT, ['time'], before)[0].percent, 0)
   assert.equal(Model.sprintBars(SPRINT, ['time'], after)[0].percent, 100)
-  assert.equal(Model.sprintBars(SPRINT, ['time'], after)[0].detail, 'ended')
 })
 
 test('sprintBars omits the time bar when the sprint has no usable dates', () => {
@@ -340,6 +338,39 @@ test('sprintBars reports zero rather than inventing a denominator', () => {
   const bars = Model.sprintBars(unestimated, ['points'], MIDPOINT)
   assert.equal(bars[0].percent, 0)
   assert.equal(bars[0].detail, '0/0')
+})
+
+// ---- pace and time left
+
+test('sprintTimeLeft is the headline figure, not a bar detail', () => {
+  assert.equal(Model.sprintTimeLeft(SPRINT, MIDPOINT), '7d left')
+  assert.equal(Model.sprintTimeLeft(SPRINT, Date.parse('2026-09-01T00:00:00.000Z')), 'ended')
+  assert.equal(Model.sprintTimeLeft(null, MIDPOINT), '')
+})
+
+test('pace compares work against the clock', () => {
+  assert.equal(Model.pace(60, 50), 'ahead')
+  assert.equal(Model.pace(50, 50), 'ahead')
+  assert.equal(Model.pace(40, 50), 'on-track')
+  assert.equal(Model.pace(30, 50), 'behind')
+})
+
+test('pace tolerates small gaps rather than crying wolf', () => {
+  // Work never tracks time evenly, and a bar that turns red on day two is a
+  // bar people learn to ignore.
+  assert.equal(Model.pace(35, 50), 'on-track')
+  assert.equal(Model.pace(34, 50), 'behind')
+})
+
+test('pace says nothing when the sprint has no usable dates', () => {
+  assert.equal(Model.pace(40, null), 'unknown')
+})
+
+test('sprintBars carries the pace of each work bar', () => {
+  const bars = Model.sprintBars(SPRINT, ['time', 'tickets'], MIDPOINT)
+  assert.equal(bars[0].pace, 'reference')
+  // 24 of 41 done is 59 percent, against 50 percent of the sprint elapsed.
+  assert.equal(bars[1].pace, 'ahead')
 })
 
 // ---- estimateCoverage

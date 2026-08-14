@@ -340,7 +340,7 @@ Panel {
           id: content
 
           width: panelFlick.width
-          spacing: Style.space(8)
+          spacing: Style.space(14)
 
           PanelHero {
             width: parent.width
@@ -392,7 +392,7 @@ Panel {
             visible: !root.showSettings
             sprint: jira.sprint
             bars: root.sprintBars
-            sprintState: jira.sprintState
+            timeLeft: Model.sprintTimeLeft(jira.sprint, Date.now())
             foreground: root.foreground
             fontFamily: root.fontFamily
           }
