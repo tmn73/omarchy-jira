@@ -25,8 +25,14 @@ Item {
   property var projects: []
 
   property var searchResults: []
-  property bool searching: false
   property string searchQuery: ""
+
+  // The query the current searchResults actually answer. The panel compares it
+  // with what is typed to decide whether it is still searching, which is more
+  // truthful than a flag: a flag has to be lowered at some exact instant, and
+  // every ordering of "lower the flag" and "post the results" leaves a frame
+  // where the panel would claim there is nothing to find.
+  property string answeredQuery: ""
 
   property bool refreshQueued: false
   property string _stdout: ""
@@ -127,27 +133,32 @@ Item {
     }
     if (searchProcess.running)
       searchProcess.running = false
-    searching = true
     _searchStdout = ""
-    searchProcess.command = [helperPath(), "--search", searchQuery]
+    var command = [helperPath(), "--search", searchQuery]
+    if (followedProjects.length > 0)
+      command.push("--projects", followedProjects.join(","))
+    searchProcess.command = command
     searchProcess.running = true
   }
 
   function clearSearch() {
     searchQuery = ""
     searchResults = []
-    searching = false
+    answeredQuery = ""
     if (searchProcess.running)
       searchProcess.running = false
   }
 
-  function applySearch(raw) {
+  // The results are posted before the query they answer, so there is no moment
+  // where answeredQuery matches the input but the list is still the old one.
+  function applySearch(raw, query) {
     try {
       var data = JSON.parse(String(raw || ""))
       searchResults = (String(data.state || "") === "ok" && Array.isArray(data.tickets)) ? data.tickets : []
     } catch (error) {
       searchResults = []
     }
+    answeredQuery = String(query || "")
   }
 
   visible: false
@@ -194,8 +205,7 @@ Item {
     running: false
     command: []
     onExited: function (exitCode) {
-      root.searching = false
-      root.applySearch(String(searchCollector.text || root._searchStdout || ""))
+      root.applySearch(String(searchCollector.text || root._searchStdout || ""), root.searchQuery)
     }
 
     stdout: StdioCollector {

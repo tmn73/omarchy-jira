@@ -63,10 +63,11 @@ Panel {
   // after the field's debounce, and merge into the same list.
   readonly property bool searchActive: searchField.query.trim() !== ""
 
-  // The panel is searching from the first keystroke until the remote answer
-  // lands, covering the debounce as well as the request. Without this the empty
-  // state claims there is nothing to find while the query is still in flight.
-  readonly property bool searching: searchActive && (searchField.pending || jira.searching)
+  // Searching means exactly one thing: what is on screen does not yet answer
+  // what is typed. That covers the debounce, the request, and every instant in
+  // between, with no flag to raise or lower at the right moment.
+  readonly property string trimmedQuery: searchField.query.trim()
+  readonly property bool searching: searchActive && jira.answeredQuery !== trimmedQuery
 
   onSearchActiveChanged: highlightedKey = ""
 
@@ -75,7 +76,7 @@ Panel {
   // same way they cross a row.
   readonly property var visibleTickets: {
     if (searchActive)
-      return Model.rankByProject(
+      return Model.filterByProject(
         Model.mergeSearchResults(Model.filterTickets(jira.tickets, searchField.query), jira.searchResults),
         root.followedProjects)
     var groups = Model.groupTickets(jira.tickets)
@@ -343,10 +344,10 @@ Panel {
 
             width: parent.width
             visible: !root.showSettings
-            busy: jira.searching
+            busy: root.searching
             foreground: root.foreground
             fontFamily: root.fontFamily
-            onQuerySubmitted: function (value) { jira.search(value) }
+            onQuerySubmitted: function (value) { jira.search(String(value).trim()) }
             onMoveRequested: function (delta) { root.moveHighlight(delta) }
             // Enter opens the highlighted row if there is one. With nothing
             // highlighted it means "search now", which is what someone who just
@@ -355,7 +356,7 @@ Panel {
               if (root.highlightedKey !== "")
                 root.openTicket(root.highlightedKey)
               else
-                jira.search(searchField.query)
+                jira.search(root.trimmedQuery)
             }
             onDismissed: {
               jira.clearSearch()

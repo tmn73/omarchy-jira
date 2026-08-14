@@ -206,31 +206,22 @@ function toggleFollowedProject(followed, key, allKeys) {
   return next
 }
 
-// Puts results from the projects someone follows first, without dropping the
-// rest.
+// Drops results from projects the user is not following.
 //
-// Excluding other projects outright would break the case search exists for: a
-// key pasted from chat has to open even when its project is not one you follow
-// day to day. Ranking gives the same first line as filtering would, and still
-// finds the other one.
-//
-// The sort is stable, so relevance order from Jira survives inside each group.
-function rankByProject(tickets, followed) {
+// This filters rather than ranks: unticking a project means not wanting to see
+// it, and burying it at the bottom of the list is not the same thing.
+function filterByProject(tickets, followed) {
   var list = asArray(tickets)
   var keys = asArray(followed)
   if (keys.length === 0 || list.length === 0)
     return list.slice()
 
-  var preferred = []
-  var others = []
+  var kept = []
   for (var i = 0; i < list.length; i++) {
-    var ticket = list[i]
-    if (keys.indexOf(text(ticket && ticket.projectKey)) === -1)
-      others.push(ticket)
-    else
-      preferred.push(ticket)
+    if (keys.indexOf(text(list[i] && list[i].projectKey)) !== -1)
+      kept.push(list[i])
   }
-  return preferred.concat(others)
+  return kept
 }
 
 // Caps a rendered list. A cap that is missing, zero, or negative returns the
@@ -251,7 +242,7 @@ if (typeof module !== "undefined" && module.exports) {
     relativeTime: relativeTime,
     filterTickets: filterTickets,
     mergeSearchResults: mergeSearchResults,
-    rankByProject: rankByProject,
+    filterByProject: filterByProject,
     projectList: projectList,
     toggleFollowedProject: toggleFollowedProject,
     limit: limit

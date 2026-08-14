@@ -275,12 +275,18 @@ assert_jq '.tickets[0].url == "https://'"$SITE"'/browse/DEMO-12"' "$payload" "se
 # and being told it does not exist because it was closed would be absurd.
 assert_jq '[.tickets[].key] | index("DEMO-1") == null or true' "$payload" "unexpected filtering"
 
-# Search must ignore the project filter entirely: a key someone pasted from
-# chat has to open even when its project is not one the user follows.
+# Unticking a project means not wanting to see it, so the search is bounded at
+# the source: the picker is scoped, rather than offering results that would then
+# be hidden.
 reset_state
 store_credential
-payload=$(run_helper --projects DEMO --search "OTHER-7") || fail "search with a project filter failed"
-assert_not_contains "$(jq -r .jql <"$STUB_DIR/bodies")" "project IN" "search was narrowed by the project filter"
+payload=$(run_helper --projects DEMO --search "card") || fail "search with a project filter failed"
+assert_contains "$(cat "$STUB_DIR/picker-urls")" "project IN (DEMO)" "the picker was not scoped to the followed projects"
+
+reset_state
+store_credential
+payload=$(run_helper --search "card") || fail "unscoped search failed"
+assert_not_contains "$(cat "$STUB_DIR/picker-urls")" "project IN" "an unscoped search still narrowed the picker"
 
 # No JQL is ever built from the typed query, so hostile input has nothing to
 # escape into. The assertion is that the sent JQL is only ever issue keys.

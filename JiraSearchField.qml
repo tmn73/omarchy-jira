@@ -30,12 +30,9 @@ Rectangle {
   signal moveRequested(int delta)
   signal activated()
 
-  // True from the first keystroke until the remote query has answered, so the
-  // panel can say it is searching rather than claiming there is nothing.
-  readonly property bool pending: debounce.running
-
-  // Everything between the first keystroke and the answer landing.
-  readonly property bool working: pending || busy
+  // The panel decides when a search is outstanding, since only it knows whether
+  // what is displayed answers what is typed. The field just shows it.
+  readonly property bool working: busy
 
   // The focus that matters is the input's, not the container's, and the panel
   // needs it to know when to stop treating letters as shortcuts.

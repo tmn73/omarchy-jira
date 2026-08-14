@@ -145,9 +145,17 @@ search_keys() {
   local query="$1" status=0 http_code key
   PICKER_FILE=$(mktemp)
 
+  # currentJQL both enables the server side search and bounds it. Narrowing it
+  # to the followed projects means an unfollowed project is never offered in the
+  # first place, rather than being fetched and then hidden.
+  local scope="order by created DESC"
+  if [[ -n $projects_filter ]]; then
+    scope="project IN ($projects_filter) order by created DESC"
+  fi
+
   status=0
   http_code=$(api_request "$account" "$token" "$base/rest/api/3/issue/picker" "$PICKER_FILE" \
-    --get --data-urlencode "query=$query" --data-urlencode "currentJQL=order by created DESC") || status=$?
+    --get --data-urlencode "query=$query" --data-urlencode "currentJQL=$scope") || status=$?
 
   if ((status != 0)); then
     rm -f "$PICKER_FILE"

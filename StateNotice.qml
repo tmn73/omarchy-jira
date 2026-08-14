@@ -48,7 +48,7 @@ Column {
     // While a query is in flight, saying nothing was found would be a claim the
     // panel cannot yet make.
     if (state === "searching")
-      return qsTr("Looking through your whole Jira site.")
+      return qsTr("Asking Jira.")
     if (state === "ok" && searchActive)
       return qsTr("No ticket matches that search.")
     if (state === "ok")

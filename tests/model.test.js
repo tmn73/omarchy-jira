@@ -193,37 +193,35 @@ test('toggleFollowedProject normalises case and ignores a blank key', () => {
   assert.deepEqual(Model.toggleFollowedProject(['DS'], '', ALL), ['DS'])
 })
 
-// ---- rankByProject
+// ---- filterByProject
 
-test('rankByProject puts followed projects first without dropping the rest', () => {
+test('filterByProject drops projects that are not followed', () => {
   const results = [
     { key: 'DES-1069', projectKey: 'DES' },
     { key: 'DS-1069', projectKey: 'DS' },
     { key: 'HUB-3', projectKey: 'HUB' }
   ]
-  const ranked = Model.rankByProject(results, ['DS'])
-  assert.deepEqual(ranked.map(t => t.key), ['DS-1069', 'DES-1069', 'HUB-3'])
+  assert.deepEqual(Model.filterByProject(results, ['DS']).map(t => t.key), ['DS-1069'])
+  assert.deepEqual(Model.filterByProject(results, ['DS', 'HUB']).map(t => t.key), ['DS-1069', 'HUB-3'])
 })
 
-test('rankByProject keeps relevance order inside each group', () => {
+test('filterByProject keeps order', () => {
   const results = [
-    { key: 'DES-1', projectKey: 'DES' },
     { key: 'DS-2', projectKey: 'DS' },
-    { key: 'DES-3', projectKey: 'DES' },
+    { key: 'DES-1', projectKey: 'DES' },
     { key: 'DS-4', projectKey: 'DS' }
   ]
-  const ranked = Model.rankByProject(results, ['DS'])
-  assert.deepEqual(ranked.map(t => t.key), ['DS-2', 'DS-4', 'DES-1', 'DES-3'])
+  assert.deepEqual(Model.filterByProject(results, ['DS']).map(t => t.key), ['DS-2', 'DS-4'])
 })
 
-test('rankByProject leaves the list alone when nothing is followed', () => {
+test('filterByProject leaves the list alone when nothing is followed', () => {
   const results = [{ key: 'B-1', projectKey: 'B' }, { key: 'A-1', projectKey: 'A' }]
-  assert.deepEqual(Model.rankByProject(results, []).map(t => t.key), ['B-1', 'A-1'])
-  assert.deepEqual(Model.rankByProject(results, null).map(t => t.key), ['B-1', 'A-1'])
+  assert.deepEqual(Model.filterByProject(results, []).map(t => t.key), ['B-1', 'A-1'])
+  assert.deepEqual(Model.filterByProject(results, null).map(t => t.key), ['B-1', 'A-1'])
 })
 
-test('rankByProject tolerates null tickets', () => {
-  assert.deepEqual(Model.rankByProject(null, ['DS']), [])
+test('filterByProject tolerates null tickets', () => {
+  assert.deepEqual(Model.filterByProject(null, ['DS']), [])
 })
 
 // ---- limit
