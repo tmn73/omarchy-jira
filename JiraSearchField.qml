@@ -23,6 +23,20 @@ Rectangle {
   signal querySubmitted(string value)
   signal dismissed()
 
+  // Typing and choosing a result happen without leaving the field, the way a
+  // command palette works. The field forwards the keys it has no use for
+  // instead of swallowing them, which is what makes the arrows keep working
+  // once someone has started typing.
+  signal moveRequested(int delta)
+  signal activated()
+
+  // True from the first keystroke until the remote query has answered, so the
+  // panel can say it is searching rather than claiming there is nothing.
+  readonly property bool pending: debounce.running
+
+  // Everything between the first keystroke and the answer landing.
+  readonly property bool working: pending || busy
+
   // The focus that matters is the input's, not the container's, and the panel
   // needs it to know when to stop treating letters as shortcuts.
   readonly property alias inputFocused: input.activeFocus
@@ -35,6 +49,18 @@ Rectangle {
   // matters belongs to the input inside it.
   function focusInput() {
     input.forceActiveFocus()
+  }
+
+  // Sets the field as if it had been typed into, debounce and all, so a caller
+  // driving the widget from outside takes exactly the same path as a keystroke.
+  function setQuery(value) {
+    input.text = String(value || "")
+    input.forceActiveFocus()
+  }
+
+  function submitOrActivate() {
+    debounce.stop()
+    root.activated()
   }
 
   width: parent ? parent.width : 0
@@ -50,23 +76,62 @@ Rectangle {
     onTriggered: root.querySubmitted(root.query)
   }
 
+  // The leading glyph is the search state: a magnifier at rest, a spinning
+  // marker while a query is on its way. A still spinner would read as a frozen
+  // panel, so it only exists while it turns.
   Text {
     id: prompt
 
     anchors.left: parent.left
     anchors.leftMargin: Style.space(4)
     anchors.verticalCenter: parent.verticalCenter
-    text: root.busy ? "\uf110" : "\uf002"
-    color: root.faint
+    text: root.working ? "\uf110" : "\uf002"
+    color: root.working ? root.muted : root.faint
     font.family: root.fontFamily
     font.pixelSize: Style.font.bodySmall
+
+    RotationAnimation on rotation {
+      running: root.working
+      from: 0
+      to: 360
+      duration: 900
+      loops: Animation.Infinite
+      onStopped: prompt.rotation = 0
+    }
+  }
+
+  // The shortcut hint. A keyboard affordance nobody can see is a keyboard
+  // affordance nobody uses, and it withdraws once the field is in use so it
+  // never competes with what is being typed.
+  Rectangle {
+    id: shortcutHint
+
+    anchors.right: parent.right
+    anchors.rightMargin: Style.space(3)
+    anchors.verticalCenter: parent.verticalCenter
+    visible: !input.activeFocus && input.text === ""
+    width: hintLabel.width + Style.space(4)
+    height: hintLabel.height + Style.space(2)
+    radius: Style.cornerRadius
+    color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.08)
+
+    Text {
+      id: hintLabel
+
+      anchors.centerIn: parent
+      text: "/"
+      color: root.faint
+      font.family: root.fontFamily
+      font.pixelSize: Style.font.caption
+      font.bold: true
+    }
   }
 
   TextInput {
     id: input
 
     anchors.left: prompt.right
-    anchors.right: parent.right
+    anchors.right: shortcutHint.visible ? shortcutHint.left : parent.right
     anchors.leftMargin: Style.space(3)
     anchors.rightMargin: Style.space(4)
     anchors.verticalCenter: parent.verticalCenter
@@ -86,16 +151,16 @@ Rectangle {
       }
     }
 
-    // Enter skips the wait. Someone who just pasted an issue key should not sit
-    // through a debounce they did not ask for.
-    Keys.onReturnPressed: {
-      debounce.stop()
-      root.querySubmitted(root.query)
-    }
-    Keys.onEnterPressed: {
-      debounce.stop()
-      root.querySubmitted(root.query)
-    }
+    // Up and down belong to the result list, not to a single line of text where
+    // they would do nothing at all.
+    Keys.onUpPressed: root.moveRequested(-1)
+    Keys.onDownPressed: root.moveRequested(1)
+
+    // Enter opens the highlighted result when there is one, and otherwise skips
+    // the debounce: someone who just pasted an issue key should not sit through
+    // a wait they did not ask for. The panel decides which case applies.
+    Keys.onReturnPressed: root.submitOrActivate()
+    Keys.onEnterPressed: root.submitOrActivate()
 
     // Escape clears a non empty field before it gives up focus, so the first
     // press never closes the panel out from under someone mid-search.

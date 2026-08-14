@@ -29,14 +29,21 @@ Panel {
   // The local filter follows the field itself, so matches among the tickets
   // already in memory appear on the keystroke. The remote results arrive later,
   // after the field's debounce, and merge into the same list.
-  readonly property bool searchActive: search.query.trim() !== ""
+  readonly property bool searchActive: searchField.query.trim() !== ""
+
+  // The panel is searching from the first keystroke until the remote answer
+  // lands, covering the debounce as well as the request. Without this the empty
+  // state claims there is nothing to find while the query is still in flight.
+  readonly property bool searching: searchActive && (searchField.pending || jira.searching)
+
+  onSearchActiveChanged: highlightedKey = ""
 
   // One flat list of every visible row, in display order. Keyboard navigation
   // walks this rather than the groups, so j and k cross a section boundary the
   // same way they cross a row.
   readonly property var visibleTickets: {
     if (searchActive)
-      return Model.mergeSearchResults(Model.filterTickets(jira.tickets, search.query), jira.searchResults)
+      return Model.mergeSearchResults(Model.filterTickets(jira.tickets, searchField.query), jira.searchResults)
     var groups = Model.groupTickets(jira.tickets)
     return Model.limit(groups.waiting, jira.maxDisplayedTickets)
       .concat(Model.limit(groups.assigned, jira.maxDisplayedTickets))
@@ -141,6 +148,13 @@ Panel {
     function toggle(): void { root.toggle() }
     function refresh(): string { jira.refresh(); return "ok" }
     function status(): string { return jira.state }
+    // Exposed so the widget can be driven from a script or a keybinding, and
+    // so the search path can be exercised without a keyboard.
+    function search(query: string): string {
+      root.open()
+      searchField.setQuery(query)
+      return "ok"
+    }
   }
 
   Timer {
@@ -202,17 +216,17 @@ Panel {
       id: keyCatcher
 
       anchors.fill: parent
-      blocked: search.inputFocused
+      blocked: searchField.inputFocused
       onMoveRequested: function (dx, dy) { if (dy !== 0) root.moveHighlight(dy) }
       onActivateRequested: root.activateHighlighted()
       onCloseRequested: root.close()
-      onTabRequested: Qt.callLater(function () { search.focusInput() })
+      onTabRequested: Qt.callLater(function () { searchField.focusInput() })
       onTextKey: function (character) {
         var key = String(character || "").toLowerCase()
         if (key === "r")
           jira.refresh()
         else if (key === "/")
-          Qt.callLater(function () { search.focusInput() })
+          Qt.callLater(function () { searchField.focusInput() })
         else if (key === "y")
           root.copyKey(root.highlightedKey)
       }
@@ -250,13 +264,23 @@ Panel {
           }
 
           JiraSearchField {
-            id: search
+            id: searchField
 
             width: parent.width
             busy: jira.searching
             foreground: root.foreground
             fontFamily: root.fontFamily
             onQuerySubmitted: function (value) { jira.search(value) }
+            onMoveRequested: function (delta) { root.moveHighlight(delta) }
+            // Enter opens the highlighted row if there is one. With nothing
+            // highlighted it means "search now", which is what someone who just
+            // pasted a key is asking for.
+            onActivated: {
+              if (root.highlightedKey !== "")
+                root.openTicket(root.highlightedKey)
+              else
+                jira.search(searchField.query)
+            }
             onDismissed: {
               jira.clearSearch()
               keyCatcher.forceActiveFocus()
@@ -305,10 +329,17 @@ Panel {
           StateNotice {
             width: parent.width
             visible: root.visibleTickets.length === 0
-            state: jira.loading && !jira.hasData ? "loading" : jira.state
-            message: jira.message
+            state: {
+              if (root.searching)
+                return "searching"
+              if (jira.loading && !jira.hasData)
+                return "loading"
+              return jira.state
+            }
+            message: root.searching ? "" : jira.message
             fetchedAt: jira.fetchedAt
             hasStaleData: jira.hasData && jira.state !== "ok"
+            searchActive: root.searchActive
             foreground: root.foreground
             fontFamily: root.fontFamily
           }

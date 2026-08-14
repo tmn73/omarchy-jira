@@ -14,6 +14,7 @@ Column {
   property string message: ""
   property string fetchedAt: ""
   property bool hasStaleData: false
+  property bool searchActive: false
   property color foreground: "white"
   property string fontFamily: ""
 
@@ -24,8 +25,10 @@ Column {
     switch (state) {
     case "loading":
       return qsTr("Loading")
+    case "searching":
+      return qsTr("Searching")
     case "ok":
-      return qsTr("Nothing on your plate")
+      return searchActive ? qsTr("No results") : qsTr("Nothing on your plate")
     case "unconfigured":
       return qsTr("Not connected")
     case "keyring-unavailable":
@@ -42,6 +45,12 @@ Column {
   }
 
   readonly property string detail: {
+    // While a query is in flight, saying nothing was found would be a claim the
+    // panel cannot yet make.
+    if (state === "searching")
+      return qsTr("Looking through your whole Jira site.")
+    if (state === "ok" && searchActive)
+      return qsTr("No ticket matches that search.")
     if (state === "ok")
       return qsTr("No tickets are assigned to you right now.")
     if (message !== "")
