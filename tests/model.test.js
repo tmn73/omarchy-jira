@@ -348,29 +348,12 @@ test('sprintTimeLeft is the headline figure, not a bar detail', () => {
   assert.equal(Model.sprintTimeLeft(null, MIDPOINT), '')
 })
 
-test('pace compares work against the clock', () => {
-  assert.equal(Model.pace(60, 50), 'ahead')
-  assert.equal(Model.pace(50, 50), 'ahead')
-  assert.equal(Model.pace(40, 50), 'on-track')
-  assert.equal(Model.pace(30, 50), 'behind')
-})
-
-test('pace tolerates small gaps rather than crying wolf', () => {
-  // Work never tracks time evenly, and a bar that turns red on day two is a
-  // bar people learn to ignore.
-  assert.equal(Model.pace(35, 50), 'on-track')
-  assert.equal(Model.pace(34, 50), 'behind')
-})
-
-test('pace says nothing when the sprint has no usable dates', () => {
-  assert.equal(Model.pace(40, null), 'unknown')
-})
-
-test('sprintBars carries the pace of each work bar', () => {
+test('sprintBars marks where the clock stands on each work bar', () => {
+  // The comparison is shown by a mark rather than a colour, because a theme can
+  // define its accent and its alert colour as the same hue.
   const bars = Model.sprintBars(SPRINT, ['time', 'tickets'], MIDPOINT)
-  assert.equal(bars[0].pace, 'reference')
-  // 24 of 41 done is 59 percent, against 50 percent of the sprint elapsed.
-  assert.equal(bars[1].pace, 'ahead')
+  assert.equal(bars[0].mark, null)
+  assert.equal(bars[1].mark, 50)
 })
 
 // ---- estimateCoverage

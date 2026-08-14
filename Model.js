@@ -288,11 +288,6 @@ function defaultDoneStatuses(sprint) {
 //
 // Nothing here invents a number. A sprint with no estimated ticket reports zero
 // points rather than falling back to counting tickets and calling them points.
-// How far behind the clock a bar is allowed to be before it is worth saying so.
-// Small gaps are noise: work never tracks time evenly, and a bar that turns red
-// on day two teaches people to ignore it.
-var PACE_TOLERANCE = 15
-
 function sprintBars(sprint, wanted, nowMs, doneStatuses) {
   if (!sprint)
     return []
@@ -309,7 +304,6 @@ function sprintBars(sprint, wanted, nowMs, doneStatuses) {
       label: "time",
       percent: elapsedPercent,
       detail: "",
-      pace: "reference",
       mark: null
     })
   }
@@ -321,7 +315,6 @@ function sprintBars(sprint, wanted, nowMs, doneStatuses) {
       label: "tickets",
       percent: ticketPercent,
       detail: totals.done + "/" + totals.total,
-      pace: pace(ticketPercent, elapsedPercent),
       mark: elapsedPercent
     })
   }
@@ -335,7 +328,6 @@ function sprintBars(sprint, wanted, nowMs, doneStatuses) {
       label: "points",
       percent: pointPercent,
       detail: totals.points.done + "/" + totals.points.total,
-      pace: pace(pointPercent, elapsedPercent),
       mark: elapsedPercent
     })
   }
@@ -351,18 +343,6 @@ function timePercent(sprint, nowMs) {
     return null
   var elapsed = Math.min(Math.max(nowMs - start, 0), end - start)
   return Math.round((elapsed / (end - start)) * 100)
-}
-
-// Compares progress against the clock. This is the whole reason the bars are
-// stacked, and the only thing in this widget worth spending a colour on.
-function pace(donePercent, elapsedPercent) {
-  if (elapsedPercent === null)
-    return "unknown"
-  if (donePercent >= elapsedPercent)
-    return "ahead"
-  if (elapsedPercent - donePercent > PACE_TOLERANCE)
-    return "behind"
-  return "on-track"
 }
 
 // The headline figure for the sprint, shown next to its name rather than on a
@@ -421,7 +401,6 @@ if (typeof module !== "undefined" && module.exports) {
     sprintBars: sprintBars,
     sprintTotals: sprintTotals,
     sprintTimeLeft: sprintTimeLeft,
-    pace: pace,
     defaultDoneStatuses: defaultDoneStatuses,
     estimateCoverage: estimateCoverage,
     projectList: projectList,

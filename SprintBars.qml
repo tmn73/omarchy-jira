@@ -9,9 +9,12 @@ import qs.Commons
 // compared to each other. Time is drawn first and dimmed: it is the ruler the
 // others are read against, not a result of its own.
 //
-// Colour is spent on one thing only, whether the work is keeping up with the
-// clock. Nothing here is coloured for decoration, so a colour showing up in the
-// panel always means something.
+// Whether the work is keeping up with the clock is shown by a mark, never by a
+// colour. A theme is free to define its accent and its alert colour as the same
+// hue, and several do, so a red-means-late scheme would silently say nothing on
+// those themes while still implying a distinction on the others. The mark works
+// everywhere, and colour is left to do what it does in every other widget:
+// follow the theme.
 Column {
   id: root
 
@@ -28,14 +31,6 @@ Column {
   // out to be, in any font or translation.
   readonly property real labelWidth: labelMetrics.width + Style.space(6)
   readonly property real detailWidth: detailMetrics.width + Style.space(4)
-
-  function paceColor(pace) {
-    if (pace === "behind")
-      return Color.urgent
-    if (pace === "ahead")
-      return Color.accent
-    return root.muted
-  }
 
   TextMetrics {
     id: labelMetrics
@@ -138,7 +133,7 @@ Column {
             radius: parent.radius
             color: barRow.isReference
               ? Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.3)
-              : root.paceColor(barRow.modelData.pace)
+              : Color.accent
 
             Behavior on width {
               NumberAnimation { duration: 220; easing.type: Easing.OutCubic }
