@@ -1,0 +1,175 @@
+#!/usr/bin/env bash
+# Connects this machine to a Jira site, once.
+#
+# The API token goes into the system keyring and nowhere else. It is never
+# written to a file, never exported, never logged, and never passed as a command
+# line argument, since anything in argv is readable by every process on the
+# machine through ps. Credentials reach curl through a config file supplied on a
+# pipe instead.
+#
+# The site and the account email are not secrets, but they are stored as
+# attributes of the same keyring entry so the credential stays a single object
+# with a single writer. Nothing has to be kept in sync with shell.json, and the
+# plugin can never hold half a credential.
+set -euo pipefail
+
+readonly SERVICE="omarchy-jira"
+readonly LABEL="Omarchy Jira"
+readonly TOKEN_PAGE="https://id.atlassian.com/manage-profile/security/api-tokens"
+
+# The validation response body can carry the account's display name, so it is
+# removed on every exit path rather than left behind in the temp directory.
+BODY_FILE=""
+cleanup() {
+  if [[ -n $BODY_FILE ]]; then
+    rm -f "$BODY_FILE"
+  fi
+}
+trap cleanup EXIT
+
+usage() {
+  cat <<'USAGE'
+Usage: omarchy-jira-auth [--status | --clear | --help]
+
+Connect this machine to a Jira site. The API token is stored in the system
+keyring and read from there at request time.
+
+  (no arguments)  Interactive setup: site, account email, API token
+  --status        Show the connected site and account, never the token
+  --clear         Remove the stored credential
+  --help          Show this message
+USAGE
+}
+
+die() {
+  echo "omarchy-jira-auth: $*" >&2
+  exit 1
+}
+
+require_tool() {
+  command -v "$1" >/dev/null 2>&1 ||
+    die "$1 is required but was not found on PATH"
+}
+
+# Accepts what people actually paste: a bare host, a full URL, a trailing slash,
+# or a deep link copied from a browser tab.
+normalize_site() {
+  local value="$1"
+  value="${value#http://}"
+  value="${value#https://}"
+  value="${value%%/*}"
+  printf '%s' "$value"
+}
+
+# Reads one attribute out of secret-tool's search output. Attributes are
+# readable without unlocking the secret itself, which is what lets --status
+# report the connection without ever touching the token.
+stored_attribute() {
+  local name="$1" line
+  line=$(secret-tool search service "$SERVICE" 2>/dev/null |
+    grep -m 1 "^attribute\.$name = " || true)
+  printf '%s' "${line#attribute.$name = }"
+}
+
+has_credential() {
+  secret-tool lookup service "$SERVICE" >/dev/null 2>&1
+}
+
+cmd_status() {
+  require_tool secret-tool
+  if ! has_credential; then
+    echo "Not connected. Run omarchy-jira-auth to connect a Jira site." >&2
+    return 1
+  fi
+  echo "Connected to $(stored_attribute site) as $(stored_attribute account)"
+}
+
+cmd_clear() {
+  require_tool secret-tool
+  secret-tool clear service "$SERVICE"
+  echo "Credential removed."
+}
+
+# Validates the triple against Jira before anything is stored, so a typo never
+# leaves a broken credential in the keyring for the widget to trip over later.
+# Returns the HTTP status on stdout.
+validate_credential() {
+  local site="$1" email="$2" token="$3" body_file="$4"
+  curl --silent --show-error \
+    --config <(printf 'user = "%s:%s"\n' "$email" "$token") \
+    --header 'Accept: application/json' \
+    --output "$body_file" \
+    --write-out '%{http_code}' \
+    --url "https://$site/rest/api/3/myself"
+}
+
+cmd_setup() {
+  require_tool curl
+  require_tool secret-tool
+
+  local site email token
+  read -r -p "Jira site (for example your-team.atlassian.net): " site
+  site=$(normalize_site "${site:-}")
+  [[ -n $site ]] || die "a site is required"
+
+  read -r -p "Account email: " email
+  [[ -n ${email:-} ]] || die "an account email is required"
+
+  echo "Create an API token at $TOKEN_PAGE"
+  read -r -s -p "API token (input hidden): " token
+  echo
+  [[ -n ${token:-} ]] || die "an API token is required"
+
+  local status http_code
+  BODY_FILE=$(mktemp)
+
+  status=0
+  http_code=$(validate_credential "$site" "$email" "$token" "$BODY_FILE") || status=$?
+
+  if ((status != 0)); then
+    die "could not reach https://$site, so nothing was stored"
+  fi
+
+  case "$http_code" in
+  200) ;;
+  401)
+    die "Jira rejected that email and token, so nothing was stored"
+    ;;
+  403)
+    die "that account is authenticated but not permitted to read the API, so nothing was stored"
+    ;;
+  404)
+    die "https://$site does not look like a Jira site, so nothing was stored"
+    ;;
+  *)
+    die "Jira answered $http_code, so nothing was stored"
+    ;;
+  esac
+
+  printf '%s' "$token" | secret-tool store --label="$LABEL" \
+    service "$SERVICE" account "$email" site "$site"
+
+  local display_name=""
+  if command -v jq >/dev/null 2>&1; then
+    display_name=$(jq -r '.displayName // empty' <"$BODY_FILE" 2>/dev/null || true)
+  fi
+
+  if [[ -n $display_name ]]; then
+    echo "Connected to $site as $display_name."
+  else
+    echo "Connected to $site as $email."
+  fi
+  echo "The token is in your system keyring. It is not stored anywhere else."
+}
+
+main() {
+  case "${1:-}" in
+  --status) cmd_status ;;
+  --clear) cmd_clear ;;
+  -h | --help) usage ;;
+  "") cmd_setup ;;
+  *) die "unknown option: $1" ;;
+  esac
+}
+
+main "$@"
