@@ -29,6 +29,24 @@ The setup asks for your site, your account email, and an API token, verifies
 them against Jira before storing anything, and prints the scopes to tick while
 you are on the token page.
 
+### Update
+
+```bash
+omarchy plugin update tmn73.jira
+```
+
+### Remove
+
+```bash
+omarchy plugin remove tmn73.jira
+```
+
+Removing the plugin leaves the credential in your keyring. To take that with it:
+
+```bash
+./omarchy-jira-auth --clear
+```
+
 ## Credentials
 
 The token lives in your system keyring, under `service=omarchy-jira`. The plugin
