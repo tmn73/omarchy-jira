@@ -1,0 +1,296 @@
+#!/usr/bin/env bash
+# Tests for omarchy-jira-fetch.
+#
+# The helper is the only part of the plugin that talks to Jira, so its contract
+# is what the QML side is written against: exactly one JSON document on stdout,
+# and exit code zero for every failure the user can actually encounter. A non
+# zero exit means the helper itself broke, which is a different thing entirely.
+set -euo pipefail
+
+ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+HELPER="$ROOT/omarchy-jira-fetch"
+FIXTURES="$ROOT/tests/fixtures"
+
+TOKEN="TESTTOKENvalue1234567890"
+EMAIL="probe@example.com"
+SITE="example.atlassian.net"
+BASE="https://api.atlassian.com/ex/jira/11111111-2222-3333-4444-555555555555"
+
+failures=0
+
+fail() {
+  echo "FAIL: $*" >&2
+  failures=$((failures + 1))
+}
+
+assert_jq() {
+  local filter="$1" payload="$2" label="$3"
+  jq -e "$filter" >/dev/null 2>&1 <<<"$payload" || fail "$label"
+}
+
+assert_contains() {
+  local haystack="$1" needle="$2" label="$3"
+  [[ $haystack == *"$needle"* ]] || fail "$label (expected to find \"$needle\")"
+}
+
+assert_not_contains() {
+  local haystack="$1" needle="$2" label="$3"
+  [[ $haystack != *"$needle"* ]] || fail "$label (unexpectedly found \"$needle\")"
+}
+
+sandbox=$(mktemp -d)
+trap 'rm -rf "$sandbox"' EXIT
+
+export STUB_DIR="$sandbox/state"
+export FIXTURE_DIR="$FIXTURES"
+mkdir -p "$STUB_DIR" "$sandbox/bin"
+
+for tool in bash cat rm mktemp jq; do
+  path=$(command -v "$tool" 2>/dev/null) && ln -sf "$path" "$sandbox/bin/$(basename "$tool")"
+done
+
+cat >"$sandbox/bin/curl" <<'STUB'
+#!/usr/bin/env bash
+printf 'curl %s\n' "$*" >>"$STUB_DIR/calls"
+config=""
+output=""
+url=""
+data=""
+args=("$@")
+for ((i = 0; i < ${#args[@]}; i++)); do
+  case "${args[i]}" in
+  --config) config="${args[i + 1]}" ;;
+  --output) output="${args[i + 1]}" ;;
+  --url) url="${args[i + 1]}" ;;
+  --data) data="${args[i + 1]}" ;;
+  esac
+done
+if [[ -n $config && -r $config ]]; then
+  cat "$config" >>"$STUB_DIR/creds"
+fi
+if [[ -n $data ]]; then
+  printf '%s\n' "$data" >>"$STUB_DIR/bodies"
+fi
+
+if [[ ${CURL_STUB_FAIL:-0} == 1 ]]; then
+  echo "curl: (6) Could not resolve host" >&2
+  exit 6
+fi
+
+code="${CURL_STUB_CODE:-200}"
+if [[ $url == *"/project/search"* ]]; then
+  code="${PROJECTS_STUB_CODE:-$code}"
+  [[ -n $output ]] && cat "$FIXTURE_DIR/projects.json" >"$output"
+else
+  [[ -n $output ]] && cat "$FIXTURE_DIR/${SEARCH_FIXTURE:-search.json}" >"$output"
+fi
+printf '%s' "$code"
+STUB
+
+cat >"$sandbox/bin/secret-tool" <<'STUB'
+#!/usr/bin/env bash
+printf 'secret-tool %s\n' "$*" >>"$STUB_DIR/calls"
+case "${1:-}" in
+lookup)
+  if [[ ${KEYRING_STUB_BROKEN:-0} == 1 ]]; then
+    echo "secret-tool: Cannot autolaunch D-Bus without X11 \$DISPLAY" >&2
+    exit 1
+  fi
+  [[ -s $STUB_DIR/vault ]] || exit 1
+  cat "$STUB_DIR/vault"
+  ;;
+search)
+  echo "search must never be called" >&2
+  exit 3
+  ;;
+*)
+  exit 2
+  ;;
+esac
+STUB
+
+chmod +x "$sandbox/bin/curl" "$sandbox/bin/secret-tool"
+
+store_credential() {
+  jq -nc --arg site "$SITE" --arg account "$EMAIL" --arg base "$BASE" --arg token "$TOKEN" \
+    '{site: $site, account: $account, base: $base, token: $token}' >"$STUB_DIR/vault"
+}
+
+reset_state() {
+  rm -f "$STUB_DIR/calls" "$STUB_DIR/creds" "$STUB_DIR/bodies"
+  : >"$STUB_DIR/calls"
+  : >"$STUB_DIR/creds"
+  : >"$STUB_DIR/bodies"
+}
+
+run_helper() {
+  PATH="$sandbox/bin" "$HELPER" "$@" 2>/dev/null
+}
+
+# ---- Syntax and help
+
+bash -n "$HELPER" || fail "helper does not parse"
+PATH="$sandbox/bin" "$HELPER" --help >/dev/null || fail "--help failed"
+
+# ---- A successful dashboard run
+
+reset_state
+store_credential
+payload=$(run_helper) || fail "helper exited non zero on success"
+
+assert_jq '.' "$payload" "the payload is not valid JSON"
+assert_jq '.state == "ok"' "$payload" "state is not ok"
+assert_jq '.schema == 1' "$payload" "schema version missing"
+assert_jq '.mode == "dashboard"' "$payload" "mode is not dashboard"
+assert_jq '.site == "'"$SITE"'"' "$payload" "site missing from the payload"
+assert_jq '.account == "'"$EMAIL"'"' "$payload" "account missing from the payload"
+assert_jq '.generatedAt | test("^[0-9]{4}-")' "$payload" "generatedAt is not a timestamp"
+
+# ---- Ticket mapping
+
+assert_jq '.tickets | length == 4' "$payload" "expected the four live tickets"
+assert_jq '[.tickets[].key] | index("DEMO-1") == null' "$payload" "a Done ticket was not filtered out"
+assert_jq '.tickets[0].key == "DEMO-12"' "$payload" "tickets are not in the API order"
+assert_jq '.tickets[0].summary != ""' "$payload" "summary missing"
+assert_jq '.tickets[0].type == "Story"' "$payload" "issue type missing"
+assert_jq '.tickets[0].status == "In Progress"' "$payload" "status name missing"
+assert_jq '.tickets[0].statusCategory == "indeterminate"' "$payload" "status category is not the category key"
+assert_jq '.tickets[0].projectKey == "DEMO"' "$payload" "project key missing"
+assert_jq '.tickets[0].projectName == "Demo Project"' "$payload" "project name missing"
+assert_jq '.tickets[0].updated | test("^2026-")' "$payload" "updated missing"
+assert_jq '.tickets[0].url == "https://'"$SITE"'/browse/DEMO-12"' "$payload" "browse url is wrong"
+
+# A status named "In Review" still reports the category it belongs to. Nothing
+# in this plugin may key off a status name, since every Jira site names its own.
+assert_jq '[.tickets[] | select(.key == "DEMO-8")][0].status == "In Review"' "$payload" "In Review name lost"
+assert_jq '[.tickets[] | select(.key == "DEMO-8")][0].statusCategory == "indeterminate"' "$payload" "In Review category wrong"
+
+# ---- Projects come with the dashboard
+
+assert_jq '.projects | length == 2' "$payload" "projects missing"
+assert_jq '.projects[0].key == "DEMO"' "$payload" "project key missing from the project list"
+assert_jq '.projects[0].name == "Demo Project"' "$payload" "project name missing from the project list"
+
+# ---- The JQL is the one the design calls for
+
+body=$(cat "$STUB_DIR/bodies")
+assert_contains "$body" "assignee = currentUser()" "the JQL does not filter on the current user"
+assert_contains "$body" "statusCategory != Done" "the JQL does not exclude the Done category"
+assert_contains "$body" "ORDER BY updated DESC" "the JQL does not order by update time"
+assert_not_contains "$body" "resolution" "the JQL filters on resolution, which lets Won't Do through"
+
+# ---- Credential handling
+
+assert_contains "$(cat "$STUB_DIR/creds")" "$TOKEN" "the token never reached curl through --config"
+assert_not_contains "$(cat "$STUB_DIR/calls")" "$TOKEN" "the token leaked into a command line"
+assert_not_contains "$(cat "$STUB_DIR/calls")" "secret-tool search" "the helper called secret-tool search"
+
+# ---- Project narrowing
+
+reset_state
+store_credential
+payload=$(run_helper --projects DEMO) || fail "helper failed with --projects"
+assert_contains "$(cat "$STUB_DIR/bodies")" 'project IN (DEMO)' "the project clause is missing"
+
+reset_state
+store_credential
+payload=$(run_helper --projects "DEMO, OPS") || fail "helper failed with two projects"
+assert_contains "$(cat "$STUB_DIR/bodies")" 'project IN (DEMO,OPS)' "the two project clause is wrong"
+
+# A project key is uppercase letters and digits, never free text. Rather than
+# asserting that particular hostile fragments are absent, which only ever proves
+# something about the fragments that were imagined, assert that the generated
+# JQL always matches one exact known shape. Anything an attacker could add would
+# have to break that shape.
+readonly JQL_SHAPE='^assignee = currentUser\(\) AND statusCategory != Done( AND project IN \([A-Z0-9_]+(,[A-Z0-9_]+)*\))? ORDER BY updated DESC$'
+
+assert_jql_shape() {
+  local label="$1" jql
+  jql=$(jq -r '.jql' <"$STUB_DIR/bodies")
+  [[ $jql =~ $JQL_SHAPE ]] || fail "$label (JQL was: $jql)"
+}
+
+for hostile in \
+  'DEMO) OR (assignee != currentUser()' \
+  'DEMO"; rm -rf /' \
+  "DEMO' OR '1'='1" \
+  'DEMO ORDER BY created' \
+  '!!!' \
+  ''; do
+  reset_state
+  store_credential
+  payload=$(run_helper --projects "$hostile") ||
+    fail "helper failed on project list: $hostile"
+  assert_jql_shape "a hostile project list escaped the JQL shape: $hostile"
+  assert_jq '.state == "ok"' "$payload" "a hostile project list broke the dashboard: $hostile"
+done
+
+# ---- No credential
+
+reset_state
+rm -f "$STUB_DIR/vault"
+payload=$(run_helper) || fail "helper exited non zero when unconfigured"
+assert_jq '.state == "unconfigured"' "$payload" "missing credential is not reported as unconfigured"
+assert_jq '.message | test("omarchy-jira-auth")' "$payload" "the unconfigured message does not name the setup command"
+assert_jq '.tickets == []' "$payload" "unconfigured payload should carry no tickets"
+
+# ---- Keyring unavailable, which is not the same thing as unconfigured
+
+reset_state
+payload=$(KEYRING_STUB_BROKEN=1 run_helper) || fail "helper exited non zero on a broken keyring"
+assert_jq '.state == "keyring-unavailable"' "$payload" "a broken keyring is not reported as such"
+
+# ---- HTTP failures
+
+reset_state
+store_credential
+payload=$(CURL_STUB_CODE=401 run_helper) || fail "helper exited non zero on 401"
+assert_jq '.state == "unauthorized"' "$payload" "401 is not reported as unauthorized"
+
+reset_state
+store_credential
+payload=$(CURL_STUB_CODE=403 run_helper) || fail "helper exited non zero on 403"
+assert_jq '.state == "forbidden"' "$payload" "403 is not reported as forbidden"
+
+reset_state
+store_credential
+payload=$(CURL_STUB_CODE=500 run_helper) || fail "helper exited non zero on 500"
+assert_jq '.state == "error"' "$payload" "500 is not reported as an error"
+assert_jq '.message | test("500")' "$payload" "the error message does not carry the status"
+
+reset_state
+store_credential
+payload=$(CURL_STUB_FAIL=1 run_helper) || fail "helper exited non zero on a transport failure"
+assert_jq '.state == "network-error"' "$payload" "a transport failure is not reported as a network error"
+
+# ---- Losing the project list must not lose the tickets
+
+reset_state
+store_credential
+payload=$(PROJECTS_STUB_CODE=500 run_helper) || fail "helper failed when the project call failed"
+assert_jq '.state == "ok"' "$payload" "a failed project call broke the whole payload"
+assert_jq '.tickets | length == 4' "$payload" "a failed project call lost the tickets"
+assert_jq '.projects == []' "$payload" "a failed project call should yield an empty project list"
+
+# ---- Every state is still one valid JSON document
+
+for scenario in unconfigured keyring keys http transport; do
+  reset_state
+  case "$scenario" in
+  unconfigured) out=$(rm -f "$STUB_DIR/vault" && run_helper) ;;
+  keyring) out=$(KEYRING_STUB_BROKEN=1 run_helper) ;;
+  keys) out=$(store_credential && run_helper) ;;
+  http) out=$(store_credential && CURL_STUB_CODE=401 run_helper) ;;
+  transport) out=$(store_credential && CURL_STUB_FAIL=1 run_helper) ;;
+  esac
+  jq -e . >/dev/null 2>&1 <<<"$out" || fail "$scenario did not produce valid JSON"
+  [[ $(jq -s 'length' <<<"$out") == 1 ]] || fail "$scenario produced more than one document"
+done
+
+# ---- Result
+
+if ((failures > 0)); then
+  echo "$failures test(s) failed" >&2
+  exit 1
+fi
+echo "helper-test: all checks passed"

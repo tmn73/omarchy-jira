@@ -1,0 +1,279 @@
+#!/usr/bin/env bash
+# Fetches the Jira work assigned to the connected account and prints one JSON
+# document on stdout.
+#
+# Two rules govern this file.
+#
+# It always exits zero for anything the user can encounter: no credential, a
+# locked keyring, an expired token, an unreachable network. Those are states of
+# the world, not crashes, and each one is described in the payload so the panel
+# can render a specific message instead of guessing from an exit code. A non
+# zero exit means the helper itself is broken.
+#
+# It never keys off a status name. Every Jira site names its statuses freely, so
+# the only portable signal is the status category, which Jira guarantees to be
+# one of new, indeterminate, or done.
+set -euo pipefail
+
+readonly SERVICE="omarchy-jira"
+readonly SCHEMA_VERSION=1
+readonly DEFAULT_MAX=100
+
+mode="dashboard"
+projects_filter=""
+max_results="$DEFAULT_MAX"
+
+SEARCH_FILE=""
+PROJECTS_FILE=""
+cleanup() {
+  [[ -n $SEARCH_FILE ]] && rm -f "$SEARCH_FILE"
+  [[ -n $PROJECTS_FILE ]] && rm -f "$PROJECTS_FILE"
+  return 0
+}
+trap cleanup EXIT
+
+usage() {
+  cat <<'USAGE'
+Usage: omarchy-jira-fetch [--projects KEY[,KEY...]] [--max N]
+
+Prints one JSON document describing the tickets assigned to the connected
+account. Run omarchy-jira-auth first to connect a site.
+
+  --projects  Restrict the dashboard to these project keys
+  --max       Maximum tickets to request, 1 to 100 (default 100)
+  --help      Show this message
+USAGE
+}
+
+# Emits a terminal payload and stops. Every field the panel binds to is present
+# in every state, so the QML side never has to test for existence.
+emit() {
+  local state="$1" message="$2" site="${3:-}" account="${4:-}"
+  jq -n \
+    --argjson schema "$SCHEMA_VERSION" \
+    --arg mode "$mode" \
+    --arg state "$state" \
+    --arg message "$message" \
+    --arg site "$site" \
+    --arg account "$account" \
+    '{
+      schema: $schema,
+      mode: $mode,
+      generatedAt: (now | todate),
+      state: $state,
+      message: $message,
+      site: $site,
+      account: $account,
+      tickets: [],
+      projects: []
+    }'
+  exit 0
+}
+
+# A project key is uppercase letters and digits starting with a letter. Anything
+# else is dropped rather than escaped, because a key is not free text and a
+# malformed one has no business reaching a JQL clause.
+sanitize_projects() {
+  local raw="$1" key cleaned=()
+  raw="${raw//,/ }"
+  for key in $raw; do
+    if [[ $key =~ ^[A-Za-z][A-Za-z0-9_]*$ ]]; then
+      cleaned+=("${key^^}")
+    fi
+  done
+  local IFS=,
+  printf '%s' "${cleaned[*]-}"
+}
+
+build_jql() {
+  local clause="assignee = currentUser() AND statusCategory != Done"
+  if [[ -n $projects_filter ]]; then
+    clause="$clause AND project IN ($projects_filter)"
+  fi
+  printf '%s ORDER BY updated DESC' "$clause"
+}
+
+# Performs one authenticated request and writes the body to a file. The
+# credentials go through a config file on a pipe, never through an argument,
+# since anything in argv is readable by every process on this machine.
+# Prints the HTTP status on stdout.
+api_request() {
+  local account="$1" token="$2" url="$3" out="$4"
+  shift 4
+  curl --silent --show-error --max-time 20 \
+    --config <(printf 'user = "%s:%s"\n' "$account" "$token") \
+    --header 'Accept: application/json' \
+    --output "$out" \
+    --write-out '%{http_code}' \
+    --url "$url" \
+    "$@"
+}
+
+# Reads the credential into CREDENTIAL and reports what happened in
+# CREDENTIAL_STATE.
+#
+# It writes to globals rather than printing, because emit() ends the process and
+# a function whose output is captured with $(...) runs in a subshell, where exit
+# only ends that subshell. A terminal state raised from inside a substitution
+# would be swallowed into a variable and the script would carry on with a broken
+# credential.
+CREDENTIAL=""
+CREDENTIAL_STATE="ok"
+read_credential() {
+  local stderr_file status
+  stderr_file=$(mktemp)
+  status=0
+  CREDENTIAL=$(secret-tool lookup service "$SERVICE" 2>"$stderr_file") || status=$?
+
+  if ((status != 0)); then
+    # Both a missing entry and an unreachable keyring exit 1, but only the
+    # second one explains itself on stderr. That is the only signal available,
+    # and telling them apart is what lets the panel say something true.
+    if [[ -s $stderr_file ]]; then
+      CREDENTIAL_STATE="keyring-unavailable"
+    else
+      CREDENTIAL_STATE="unconfigured"
+    fi
+  elif [[ -z $CREDENTIAL ]]; then
+    CREDENTIAL_STATE="unconfigured"
+  fi
+
+  rm -f "$stderr_file"
+}
+
+field() {
+  local name="$1" json="$2"
+  printf '%s' "$json" | jq -r --arg name "$name" '.[$name] // empty'
+}
+
+while (($# > 0)); do
+  case "$1" in
+  --projects)
+    projects_filter=$(sanitize_projects "${2:-}")
+    shift 2
+    ;;
+  --max)
+    max_results="${2:-$DEFAULT_MAX}"
+    [[ $max_results =~ ^[0-9]+$ ]] || {
+      echo "omarchy-jira-fetch: --max must be a number" >&2
+      exit 2
+    }
+    ((max_results < 1)) && max_results=1
+    ((max_results > 100)) && max_results=100
+    shift 2
+    ;;
+  -h | --help)
+    usage
+    exit 0
+    ;;
+  *)
+    echo "omarchy-jira-fetch: unknown option: $1" >&2
+    exit 2
+    ;;
+  esac
+done
+
+for tool in curl jq; do
+  command -v "$tool" >/dev/null 2>&1 || {
+    echo "omarchy-jira-fetch: $tool is required but was not found on PATH" >&2
+    exit 2
+  }
+done
+
+command -v secret-tool >/dev/null 2>&1 ||
+  emit "keyring-unavailable" "secret-tool was not found. Install libsecret to store the Jira token."
+
+read_credential
+case "$CREDENTIAL_STATE" in
+keyring-unavailable)
+  emit "keyring-unavailable" "The system keyring did not answer. Check that gnome-keyring is running."
+  ;;
+unconfigured)
+  emit "unconfigured" "Not connected to Jira. Run omarchy-jira-auth to connect a site."
+  ;;
+esac
+
+site=$(field site "$CREDENTIAL")
+account=$(field account "$CREDENTIAL")
+base=$(field base "$CREDENTIAL")
+token=$(field token "$CREDENTIAL")
+
+if [[ -z $site || -z $account || -z $base || -z $token ]]; then
+  emit "unconfigured" "The stored Jira credential is incomplete. Run omarchy-jira-auth again."
+fi
+
+SEARCH_FILE=$(mktemp)
+search_body=$(jq -nc --arg jql "$(build_jql)" --argjson max "$max_results" \
+  '{jql: $jql, maxResults: $max, fields: ["summary","status","issuetype","project","updated"]}')
+
+status=0
+http_code=$(api_request "$account" "$token" "$base/rest/api/3/search/jql" "$SEARCH_FILE" \
+  --header 'Content-Type: application/json' --request POST --data "$search_body") || status=$?
+
+if ((status != 0)); then
+  emit "network-error" "Could not reach $site." "$site" "$account"
+fi
+
+case "$http_code" in
+200) ;;
+401)
+  emit "unauthorized" "Jira rejected the stored token. Run omarchy-jira-auth to reconnect." "$site" "$account"
+  ;;
+403)
+  emit "forbidden" "This account is not permitted to read those issues." "$site" "$account"
+  ;;
+*)
+  emit "error" "Jira answered $http_code." "$site" "$account"
+  ;;
+esac
+
+jq -e . >/dev/null 2>&1 <"$SEARCH_FILE" ||
+  emit "error" "Jira returned a response this plugin could not read." "$site" "$account"
+
+# The project list is a convenience for the settings pane. Losing it must never
+# cost the tickets, so it is fetched last and its failure is silent.
+PROJECTS_FILE=$(mktemp)
+projects_status=0
+projects_code=$(api_request "$account" "$token" \
+  "$base/rest/api/3/project/search?maxResults=50" "$PROJECTS_FILE") || projects_status=$?
+
+if ((projects_status != 0)) || [[ $projects_code != 200 ]] ||
+  ! jq -e . >/dev/null 2>&1 <"$PROJECTS_FILE"; then
+  printf '{"values":[]}' >"$PROJECTS_FILE"
+fi
+
+jq -n \
+  --argjson schema "$SCHEMA_VERSION" \
+  --arg mode "$mode" \
+  --arg site "$site" \
+  --arg account "$account" \
+  --slurpfile search "$SEARCH_FILE" \
+  --slurpfile projects "$PROJECTS_FILE" \
+  '{
+    schema: $schema,
+    mode: $mode,
+    generatedAt: (now | todate),
+    state: "ok",
+    message: "",
+    site: $site,
+    account: $account,
+    tickets: [
+      ($search[0].issues // [])[]
+      | select(.fields.status.statusCategory.key != "done")
+      | {
+          key: .key,
+          summary: (.fields.summary // ""),
+          type: (.fields.issuetype.name // ""),
+          status: (.fields.status.name // ""),
+          statusCategory: (.fields.status.statusCategory.key // "new"),
+          projectKey: (.fields.project.key // ""),
+          projectName: (.fields.project.name // ""),
+          updated: (.fields.updated // ""),
+          url: "https://\($site)/browse/\(.key)"
+        }
+    ],
+    projects: [
+      ($projects[0].values // [])[]
+      | { key: .key, name: (.name // .key) }
+    ]
+  }'

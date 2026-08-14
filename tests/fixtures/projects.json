@@ -1,0 +1,10 @@
+{
+  "isLast": true,
+  "total": 2,
+  "startAt": 0,
+  "maxResults": 50,
+  "values": [
+    { "key": "DEMO", "name": "Demo Project", "projectTypeKey": "software" },
+    { "key": "OPS", "name": "Operations", "projectTypeKey": "software" }
+  ]
+}
