@@ -54,11 +54,18 @@ reads it at request time and never copies, logs, caches, or writes it anywhere.
 Nothing lands in `shell.json` or in a dotfile, and no credential is ever typed
 into a bar popup.
 
-Two details are deliberate rather than incidental:
+A few details are deliberate rather than incidental:
 
 - Credentials reach `curl` through a config file on a pipe, never as an
   argument, because anything in `argv` is readable by every process on the
   machine through `ps`.
+- The same goes for your search text and for what Jira sends back: the query
+  reaches the helper through the environment, which only you can read,
+  request bodies reach `curl` on stdin, and sprint names and goals reach `jq`
+  through the environment.
+- Ticket summaries, statuses and sprint names are shown as plain text, so
+  markup written into a Jira ticket is never rendered and cannot make your
+  desktop load anything.
 - The plugin never calls `secret-tool search`, which prints the secret on
   stdout. It reads the credential with `lookup`, which returns only what was
   asked for.
@@ -151,7 +158,7 @@ Run the helpers directly to see what the panel is given:
 
 ```bash
 ./omarchy-jira-fetch --projects DS --sprint | jq
-./omarchy-jira-fetch --search 1069 | jq
+OMARCHY_JIRA_QUERY=1069 ./omarchy-jira-fetch --search | jq
 ```
 
 QML changes need `omarchy-restart-shell`. Touching a file is not enough: the

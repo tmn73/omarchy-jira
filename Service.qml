@@ -146,6 +146,10 @@ Item {
 
   // A ticket the widget has never heard of has no local match, so search always
   // asks the helper as well. The panel merges both sides.
+  //
+  // The query goes through the environment, which only this user can read,
+  // never through the arguments, which every local user can read in the
+  // process list.
   function search(query) {
     searchQuery = String(query || "")
     if (searchQuery.trim() === "") {
@@ -155,7 +159,8 @@ Item {
     if (searchProcess.running)
       searchProcess.running = false
     _searchStdout = ""
-    var command = [helperPath(), "--search", searchQuery]
+    searchProcess.environment = { "OMARCHY_JIRA_QUERY": searchQuery }
+    var command = [helperPath(), "--search"]
     if (followedProjects.length > 0)
       command.push("--projects", followedProjects.join(","))
     searchProcess.command = command

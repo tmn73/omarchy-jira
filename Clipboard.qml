@@ -7,6 +7,7 @@ import QtQuick
 // to be copied from, and is never shown or focused.
 TextEdit {
   id: root
+  textFormat: TextEdit.PlainText
 
   function put(value) {
     root.text = String(value || "")

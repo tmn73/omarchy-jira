@@ -45,13 +45,22 @@ export STUB_DIR="$sandbox/state"
 export FIXTURE_DIR="$FIXTURES"
 mkdir -p "$STUB_DIR" "$sandbox/bin"
 
-for tool in bash cat rm mktemp jq; do
+for tool in bash cat rm mktemp; do
   path=$(command -v "$tool" 2>/dev/null) && ln -sf "$path" "$sandbox/bin/$(basename "$tool")"
 done
+
+# jq runs for real, but every command line it gets is kept in argv, with
+# curl's, so a test can check that no private text reaches a process argument.
+cat >"$sandbox/bin/jq" <<STUB
+#!/usr/bin/env bash
+printf 'jq %s\n' "\$*" >>"\$STUB_DIR/argv"
+exec "$(command -v jq)" "\$@"
+STUB
 
 cat >"$sandbox/bin/curl" <<'STUB'
 #!/usr/bin/env bash
 printf 'curl %s\n' "$*" >>"$STUB_DIR/calls"
+printf 'curl %s\n' "$*" >>"$STUB_DIR/argv"
 config=""
 output=""
 url=""
@@ -64,7 +73,15 @@ for ((i = 0; i < ${#args[@]}; i++)); do
   --output) output="${args[i + 1]}" ;;
   --url) url="${args[i + 1]}" ;;
   --data) data="${args[i + 1]}" ;;
-  --data-urlencode) query_params+=("${args[i + 1]}") ;;
+  --data-binary)
+    data="${args[i + 1]}"
+    [[ $data == "@-" ]] && data=$(cat)
+    ;;
+  --data-urlencode)
+    param="${args[i + 1]}"
+    [[ $param == *"@-" ]] && param="${param%@-}=$(cat)"
+    query_params+=("$param")
+    ;;
   esac
 done
 if [[ -n $config && -r $config ]]; then
@@ -132,7 +149,7 @@ search)
 esac
 STUB
 
-chmod +x "$sandbox/bin/curl" "$sandbox/bin/secret-tool"
+chmod +x "$sandbox/bin/curl" "$sandbox/bin/secret-tool" "$sandbox/bin/jq"
 
 store_credential() {
   jq -nc --arg site "$SITE" --arg account "$EMAIL" --arg base "$BASE" --arg token "$TOKEN" \
@@ -140,8 +157,9 @@ store_credential() {
 }
 
 reset_state() {
-  rm -f "$STUB_DIR/calls" "$STUB_DIR/creds" "$STUB_DIR/bodies" "$STUB_DIR/picker-urls"
+  rm -f "$STUB_DIR/calls" "$STUB_DIR/creds" "$STUB_DIR/bodies" "$STUB_DIR/picker-urls" "$STUB_DIR/argv"
   : >"$STUB_DIR/calls"
+  : >"$STUB_DIR/argv"
   : >"$STUB_DIR/creds"
   : >"$STUB_DIR/bodies"
   : >"$STUB_DIR/picker-urls"
@@ -352,7 +370,7 @@ assert_not_contains "$(cat "$STUB_DIR/calls")" "/rest/api/3/field" "the field ca
 # Search has no business asking about sprints.
 reset_state
 store_credential
-payload=$(run_helper --sprint --search "card") || fail "search failed"
+payload=$(OMARCHY_JIRA_QUERY="card" run_helper --sprint --search) || fail "search failed"
 assert_not_contains "$(cat "$STUB_DIR/calls")" "/rest/agile/" "search asked for the sprint"
 assert_jq '.sprint == null' "$payload" "search should carry no sprint"
 
@@ -368,7 +386,7 @@ assert_jq '.sprint == null' "$payload" "search should carry no sprint"
 
 reset_state
 store_credential
-payload=$(run_helper --search "1069") || fail "search failed"
+payload=$(OMARCHY_JIRA_QUERY="1069" run_helper --search) || fail "search failed"
 assert_jq '.mode == "search"' "$payload" "search mode is not reported"
 assert_jq '.projects == []' "$payload" "search should not fetch the project list"
 assert_not_contains "$(cat "$STUB_DIR/calls")" "/project/search" "search fetched the project list anyway"
@@ -402,12 +420,12 @@ assert_jq '[.tickets[].key] | index("DEMO-1") == null or true' "$payload" "unexp
 # be hidden.
 reset_state
 store_credential
-payload=$(run_helper --projects DEMO --search "card") || fail "search with a project filter failed"
+payload=$(OMARCHY_JIRA_QUERY="card" run_helper --projects DEMO --search) || fail "search with a project filter failed"
 assert_contains "$(cat "$STUB_DIR/picker-urls")" "project IN (DEMO)" "the picker was not scoped to the followed projects"
 
 reset_state
 store_credential
-payload=$(run_helper --search "card") || fail "unscoped search failed"
+payload=$(OMARCHY_JIRA_QUERY="card" run_helper --search) || fail "unscoped search failed"
 assert_not_contains "$(cat "$STUB_DIR/picker-urls")" "project IN" "an unscoped search still narrowed the picker"
 
 # No JQL is ever built from the typed query, so hostile input has nothing to
@@ -423,7 +441,7 @@ for hostile in \
   'ORDER BY created'; do
   reset_state
   store_credential
-  payload=$(run_helper --search "$hostile") || fail "search failed on: $hostile"
+  payload=$(OMARCHY_JIRA_QUERY="$hostile" run_helper --search) || fail "search failed on: $hostile"
   jql=$(jq -r .jql <"$STUB_DIR/bodies")
   [[ $jql =~ $SEARCH_JQL_SHAPE ]] || fail "a hostile query escaped the JQL shape: $hostile (was: $jql)"
   assert_jq '.state == "ok"' "$payload" "a hostile query broke search: $hostile"
@@ -432,7 +450,7 @@ done
 # An empty query is not a search at all and must not cost two API calls.
 reset_state
 store_credential
-payload=$(run_helper --search "   ") || fail "search failed on whitespace"
+payload=$(OMARCHY_JIRA_QUERY="   " run_helper --search) || fail "search failed on whitespace"
 assert_jq '.state == "ok"' "$payload" "a blank search is not ok"
 assert_jq '.tickets == []' "$payload" "a blank search returned tickets"
 [[ ! -s "$STUB_DIR/picker-urls" ]] || fail "a blank search still called the picker"
@@ -441,7 +459,7 @@ assert_jq '.tickets == []' "$payload" "a blank search returned tickets"
 # send a detail request with an empty key list.
 reset_state
 store_credential
-payload=$(PICKER_FIXTURE=picker-empty.json run_helper --search "nothing") || fail "search failed on no matches"
+payload=$(PICKER_FIXTURE=picker-empty.json OMARCHY_JIRA_QUERY="nothing" run_helper --search) || fail "search failed on no matches"
 assert_jq '.state == "ok"' "$payload" "an empty picker result is not ok"
 assert_jq '.tickets == []' "$payload" "an empty picker result returned tickets"
 [[ ! -s "$STUB_DIR/bodies" ]] || fail "an empty picker result still asked for details"
@@ -449,8 +467,33 @@ assert_jq '.tickets == []' "$payload" "an empty picker result returned tickets"
 # A picker failure is a failed search, reported as such.
 reset_state
 store_credential
-payload=$(PICKER_STUB_CODE=401 run_helper --search "anything") || fail "search exited non zero on 401"
+payload=$(PICKER_STUB_CODE=401 OMARCHY_JIRA_QUERY="anything" run_helper --search) || fail "search exited non zero on 401"
 assert_jq '.state == "unauthorized"' "$payload" "a rejected picker call is not reported"
+
+# ---- No private text in process arguments
+#
+# Every local user can read /proc/<pid>/cmdline. The typed query, the ticket
+# keys it matched, the sprint name and goal, and the account never reach the
+# command line of curl or jq: they go through the environment or stdin.
+
+reset_state
+store_credential
+payload=$(OMARCHY_JIRA_QUERY="salary review 1069" run_helper --search) || fail "search failed"
+assert_jq '.state == "ok"' "$payload" "search through the environment failed"
+assert_contains "$(cat "$STUB_DIR/picker-urls")" "salary review 1069" "the query never reached the picker"
+argv=$(cat "$STUB_DIR/argv")
+assert_not_contains "$argv" "salary review" "the typed query reached a process argument"
+assert_not_contains "$argv" "DEMO-12" "a matched ticket key reached a process argument"
+assert_not_contains "$argv" "$EMAIL" "the account reached a process argument"
+
+reset_state
+store_credential
+payload=$(run_helper --projects DEMO --sprint) || fail "sprint run failed"
+assert_jq '.sprint.name == "Demo Sprint 12" and .sprint.goal == "Ship the rollout"' "$payload" "the sprint did not come through"
+argv=$(cat "$STUB_DIR/argv")
+assert_not_contains "$argv" "Demo Sprint 12" "the sprint name reached a process argument"
+assert_not_contains "$argv" "Ship the rollout" "the sprint goal reached a process argument"
+assert_not_contains "$argv" "$EMAIL" "the account reached a process argument"
 
 # The dashboard still treats 400 as the error it is.
 reset_state

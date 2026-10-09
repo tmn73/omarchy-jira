@@ -25,6 +25,7 @@ Rectangle {
   TapHandler { onTapped: root.toggled() }
 
   Text {
+    textFormat: Text.PlainText
     anchors.centerIn: parent
     // A gear going in, an arrow coming back.
     text: root.active ? "\uf053" : "\uf013"

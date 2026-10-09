@@ -85,6 +85,7 @@ Rectangle {
   // panel, so it only exists while it turns.
   Text {
     id: prompt
+    textFormat: Text.PlainText
 
     anchors.left: parent.left
     anchors.leftMargin: Style.space(4)
@@ -121,6 +122,7 @@ Rectangle {
 
     Text {
       id: hintLabel
+      textFormat: Text.PlainText
 
       anchors.centerIn: parent
       text: "/"
@@ -179,6 +181,7 @@ Rectangle {
     }
 
     Text {
+      textFormat: Text.PlainText
       anchors.verticalCenter: parent.verticalCenter
       visible: input.text === "" && !input.activeFocus
       text: qsTr("Search any ticket by key or title")

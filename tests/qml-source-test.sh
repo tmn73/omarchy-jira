@@ -50,6 +50,19 @@ for file in "$ROOT"/*.qml; do
   hasnt "$name" "(^|[^.[:alnum:]_])Color\." "$name uses a bare Color; Qt 6.12 shadows it, use Commons.Color"
 done
 
+# ---- Jira text is never rich text
+#
+# Ticket summaries, statuses and sprint names are written by other Jira users.
+# A Text in AutoText would render "<img src=...>" in one of them and make the
+# desktop fetch that address, so every Text is plain text.
+
+for file in "$ROOT"/*.qml; do
+  name=$(basename "$file")
+  texts=$(grep -cE '^[[:space:]]*Text \{' "$file" || true)
+  plain=$(grep -c 'textFormat: Text.PlainText' "$file" || true)
+  ((texts == plain)) || fail "$name has $texts Text items but $plain in plain text"
+done
+
 # ---- Service exposes what the panel binds to
 #
 # These are the names Panel.qml reads. Renaming one without the other produces

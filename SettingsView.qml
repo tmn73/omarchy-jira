@@ -97,6 +97,7 @@ Column {
       spacing: Style.space(3)
 
       Text {
+        textFormat: Text.PlainText
         anchors.verticalCenter: parent.verticalCenter
         width: Style.space(8)
         text: toggle.checked ? "\uf14a" : "\uf096"
@@ -111,6 +112,7 @@ Column {
         spacing: Style.space(1)
 
         Text {
+          textFormat: Text.PlainText
           width: parent.width
           text: toggle.label
           color: toggle.checked ? root.foreground : root.muted
@@ -120,6 +122,7 @@ Column {
         }
 
         Text {
+          textFormat: Text.PlainText
           width: parent.width
           visible: toggle.hint !== ""
           text: toggle.hint
@@ -137,6 +140,7 @@ Column {
   SectionTitle { text: qsTr("PROJECTS") }
 
   Text {
+    textFormat: Text.PlainText
     width: parent.width
     text: root.followingAll
       ? qsTr("Every project is included. Untick the ones you do not care about.")
@@ -148,6 +152,7 @@ Column {
   }
 
   Text {
+    textFormat: Text.PlainText
     width: parent.width
     visible: !root.projects || root.projects.length === 0
     text: qsTr("No projects loaded yet.")
@@ -182,6 +187,7 @@ Column {
   SectionTitle { text: qsTr("SPRINT") }
 
   Text {
+    textFormat: Text.PlainText
     width: parent.width
     text: qsTr("Which progress bars to show above your tickets. Untick them all to turn the section off and stop asking Jira for it.")
     color: root.faint
@@ -215,6 +221,7 @@ Column {
   }
 
   Text {
+    textFormat: Text.PlainText
     width: parent.width
     visible: root.sprintBars.length > 0
     color: root.faint
@@ -250,6 +257,7 @@ Column {
   }
 
   Text {
+    textFormat: Text.PlainText
     width: parent.width
     visible: root.sprint !== null && root.sprintBars.length > 0
     text: qsTr("The statuses in this sprint. Tick the ones your team treats as finished.")
@@ -279,6 +287,7 @@ Column {
   SectionTitle { text: qsTr("CONNECTION") }
 
   Text {
+    textFormat: Text.PlainText
     width: parent.width
     color: root.faint
     font.family: root.fontFamily

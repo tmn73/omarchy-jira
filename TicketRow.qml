@@ -71,6 +71,7 @@ Rectangle {
     spacing: Style.space(4)
 
     Text {
+      textFormat: Text.PlainText
       anchors.verticalCenter: parent.verticalCenter
       width: Style.space(8)
       text: root.typeGlyph(root.ticket ? root.ticket.type : "")
@@ -91,6 +92,7 @@ Rectangle {
 
         Text {
           id: keyLabel
+          textFormat: Text.PlainText
 
           text: root.ticketKey
           color: root.foreground
@@ -100,6 +102,7 @@ Rectangle {
         }
 
         Text {
+          textFormat: Text.PlainText
           width: parent.width - keyLabel.width - Style.space(3)
           text: root.ticket ? String(root.ticket.summary || "") : ""
           color: root.muted
@@ -110,6 +113,7 @@ Rectangle {
       }
 
       Text {
+        textFormat: Text.PlainText
         width: parent.width
         color: root.faint
         font.family: root.fontFamily

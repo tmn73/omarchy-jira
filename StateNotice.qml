@@ -70,6 +70,7 @@ Column {
   spacing: Style.space(3)
 
   Text {
+    textFormat: Text.PlainText
     width: parent.width
     text: root.headline
     color: root.state === "ok" ? root.muted : root.foreground
@@ -80,6 +81,7 @@ Column {
   }
 
   Text {
+    textFormat: Text.PlainText
     width: parent.width
     visible: root.detail !== ""
     text: root.detail
@@ -98,6 +100,7 @@ Column {
 
     Text {
       id: commandLabel
+      textFormat: Text.PlainText
 
       anchors.centerIn: parent
       text: root.command
@@ -110,6 +113,7 @@ Column {
   // A dropped network keeps the last known tickets on screen, so this line is
   // what stops them from being mistaken for current ones.
   Text {
+    textFormat: Text.PlainText
     width: parent.width
     visible: root.hasStaleData && root.fetchedAt !== ""
     text: qsTr("Showing the last successful refresh.")

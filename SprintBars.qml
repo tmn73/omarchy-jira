@@ -62,6 +62,7 @@ Column {
 
     Text {
       id: sprintName
+      textFormat: Text.PlainText
 
       anchors.left: parent.left
       anchors.right: timeLabel.left
@@ -77,6 +78,7 @@ Column {
 
     Text {
       id: timeLabel
+      textFormat: Text.PlainText
 
       anchors.right: parent.right
       anchors.verticalCenter: parent.verticalCenter
@@ -106,6 +108,7 @@ Column {
 
         Text {
           id: barLabel
+          textFormat: Text.PlainText
 
           anchors.left: parent.left
           anchors.verticalCenter: parent.verticalCenter
@@ -162,6 +165,7 @@ Column {
         }
 
         Text {
+          textFormat: Text.PlainText
           anchors.right: parent.right
           anchors.verticalCenter: parent.verticalCenter
           visible: barRow.modelData.detail !== ""

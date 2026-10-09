@@ -13,6 +13,11 @@
 # It never keys off a status name. Every Jira site names its statuses freely, so
 # the only portable signal is the status category, which Jira guarantees to be
 # one of new, indeterminate, or done.
+#
+# And nothing typed by the user or read from Jira goes into a process argument,
+# because every local user can read those in /proc/<pid>/cmdline. Values reach
+# jq through the environment, which only this user can read, and reach curl on
+# stdin.
 set -euo pipefail
 
 readonly SERVICE="omarchy-jira"
@@ -38,14 +43,15 @@ trap cleanup EXIT
 usage() {
   cat <<'USAGE'
 Usage: omarchy-jira-fetch [--projects KEY[,KEY...]] [--max N]
-       omarchy-jira-fetch --search QUERY
+       OMARCHY_JIRA_QUERY=QUERY omarchy-jira-fetch --search
 
 Prints one JSON document describing the tickets assigned to the connected
 account, or the tickets matching a search. Run omarchy-jira-auth first to
 connect a site.
 
   --projects  Restrict the dashboard to these project keys
-  --search    Search the whole site by issue key or summary
+  --search    Search the whole site by issue key or summary. The query comes
+              from OMARCHY_JIRA_QUERY, never from an argument
   --sprint    Also report the active sprint and its progress
   --max       Maximum tickets to request, 1 to 100 (default 100)
   --help      Show this message
@@ -56,21 +62,16 @@ USAGE
 # in every state, so the QML side never has to test for existence.
 emit() {
   local state="$1" message="$2" site="${3:-}" account="${4:-}"
-  jq -n \
-    --argjson schema "$SCHEMA_VERSION" \
-    --arg mode "$mode" \
-    --arg state "$state" \
-    --arg message "$message" \
-    --arg site "$site" \
-    --arg account "$account" \
+  MODE="$mode" STATE="$state" MESSAGE="$message" SITE="$site" ACCOUNT="$account" \
+    jq -n --argjson schema "$SCHEMA_VERSION" \
     '{
       schema: $schema,
-      mode: $mode,
+      mode: $ENV.MODE,
       generatedAt: (now | todate),
-      state: $state,
-      message: $message,
-      site: $site,
-      account: $account,
+      state: $ENV.STATE,
+      message: $ENV.MESSAGE,
+      site: $ENV.SITE,
+      account: $ENV.ACCOUNT,
       tickets: [],
       projects: [],
       sprint: null,
@@ -83,19 +84,16 @@ emit() {
 # result never has to borrow an error state to say "nothing here".
 emit_results() {
   local site="$2" account="$3"
-  jq -n \
-    --argjson schema "$SCHEMA_VERSION" \
-    --arg mode "$mode" \
-    --arg site "$site" \
-    --arg account "$account" \
+  MODE="$mode" SITE="$site" ACCOUNT="$account" \
+    jq -n --argjson schema "$SCHEMA_VERSION" \
     '{
       schema: $schema,
-      mode: $mode,
+      mode: $ENV.MODE,
       generatedAt: (now | todate),
       state: "ok",
       message: "",
-      site: $site,
-      account: $account,
+      site: $ENV.SITE,
+      account: $ENV.ACCOUNT,
       tickets: [],
       projects: [],
       sprint: null,
@@ -160,8 +158,8 @@ search_keys() {
   fi
 
   status=0
-  http_code=$(api_request "$account" "$token" "$base/rest/api/3/issue/picker" "$PICKER_FILE" \
-    --get --data-urlencode "query=$query" --data-urlencode "currentJQL=$scope") || status=$?
+  http_code=$(printf '%s' "$query" | api_request "$account" "$token" "$base/rest/api/3/issue/picker" "$PICKER_FILE" \
+    --get --data-urlencode "query@-" --data-urlencode "currentJQL=$scope") || status=$?
 
   if ((status != 0)); then
     rm -f "$PICKER_FILE"
@@ -282,10 +280,10 @@ fetch_sprint_from_issues() {
   file=$(mktemp)
   jql="project IN ($projects_filter) AND sprint in openSprints()"
   fields=$(printf '%s' "$POINTS_FIELDS" | jq -c --arg sprint "$SPRINT_FIELD" '["status", $sprint] + .')
-  body=$(jq -nc --arg jql "$jql" --argjson fields "$fields" '{jql: $jql, maxResults: 200, fields: $fields}')
+  body=$(JQL="$jql" jq -nc --argjson fields "$fields" '{jql: $ENV.JQL, maxResults: 200, fields: $fields}')
 
-  http_code=$(api_request "$account" "$token" "$base/rest/api/3/search/jql" "$file" \
-    --header 'Content-Type: application/json' --request POST --data "$body") || status=$?
+  http_code=$(printf '%s' "$body" | api_request "$account" "$token" "$base/rest/api/3/search/jql" "$file" \
+    --header 'Content-Type: application/json' --request POST --data-binary @-) || status=$?
 
   if ((status != 0)) || [[ $http_code != 200 ]] || ! jq -e . >/dev/null 2>&1 <"$file"; then
     rm -f "$file"
@@ -415,11 +413,11 @@ fetch_sprint() {
     return 0
   fi
 
-  SPRINT_JSON=$(jq -c \
-    --argjson meta "$sprint_meta" \
+  SPRINT_JSON=$(SPRINT_META="$sprint_meta" jq -c \
     --argjson points "$POINTS_FIELDS" \
     '
-    [.issues[]? | . as $issue | {
+    ($ENV.SPRINT_META | fromjson) as $meta
+    | [.issues[]? | . as $issue | {
       status: ($issue.fields.status.name // ""),
       category: ($issue.fields.status.statusCategory.key // ""),
       estimate: ([$points[] | $issue.fields[.]] | map(select(. != null)) | .[0])
@@ -510,8 +508,8 @@ while (($# > 0)); do
     ;;
   --search)
     mode="search"
-    search_query="${2:-}"
-    shift 2
+    search_query="${OMARCHY_JIRA_QUERY:-}"
+    shift
     ;;
   --sprint)
     want_sprint=1
@@ -589,12 +587,12 @@ if [[ $mode == "search" ]]; then
 else
   jql=$(build_jql)
 fi
-search_body=$(jq -nc --arg jql "$jql" --argjson max "$max_results" \
-  '{jql: $jql, maxResults: $max, fields: ["summary","status","issuetype","project","updated"]}')
+search_body=$(JQL="$jql" jq -nc --argjson max "$max_results" \
+  '{jql: $ENV.JQL, maxResults: $max, fields: ["summary","status","issuetype","project","updated"]}')
 
 status=0
-http_code=$(api_request "$account" "$token" "$base/rest/api/3/search/jql" "$SEARCH_FILE" \
-  --header 'Content-Type: application/json' --request POST --data "$search_body") || status=$?
+http_code=$(printf '%s' "$search_body" | api_request "$account" "$token" "$base/rest/api/3/search/jql" "$SEARCH_FILE" \
+  --header 'Content-Type: application/json' --request POST --data-binary @-) || status=$?
 
 if ((status != 0)); then
   emit "network-error" "Could not reach $site." "$site" "$account"
@@ -648,24 +646,20 @@ if [[ -n $matched_keys ]]; then
   order_json=$(printf '%s' "$matched_keys" | jq -R 'split(",")')
 fi
 
+MODE="$mode" SITE="$site" ACCOUNT="$account" ORDER="$order_json" SPRINT="$SPRINT_JSON" SPRINT_STATE="$SPRINT_STATE" \
 jq -n \
   --argjson schema "$SCHEMA_VERSION" \
-  --arg mode "$mode" \
-  --arg site "$site" \
-  --arg account "$account" \
   --slurpfile search "$SEARCH_FILE" \
   --slurpfile projects "$PROJECTS_FILE" \
-  --argjson order "$order_json" \
-  --argjson sprint "$SPRINT_JSON" \
-  --arg sprintState "$SPRINT_STATE" \
-  '{
+  '$ENV.MODE as $mode | $ENV.SITE as $site | ($ENV.ORDER | fromjson) as $order
+  | {
     schema: $schema,
     mode: $mode,
     generatedAt: (now | todate),
     state: "ok",
     message: "",
     site: $site,
-    account: $account,
+    account: $ENV.ACCOUNT,
     tickets: [
       ($search[0].issues // [])[]
       | select($mode == "search" or .fields.status.statusCategory.key != "done")
@@ -685,8 +679,8 @@ jq -n \
       ($projects[0].values // [])[]
       | { key: .key, name: (.name // .key) }
     ],
-    sprint: $sprint,
-    sprintState: $sprintState
+    sprint: ($ENV.SPRINT | fromjson),
+    sprintState: $ENV.SPRINT_STATE
   }
   # Jira returns matched issues in its own order, but the picker ranked them by
   # relevance, and that ranking is the useful one for a search box.

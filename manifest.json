@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "tmn73.jira",
   "name": "Jira",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "author": "tmn73",
   "license": "MIT",
   "description": "The Jira tickets waiting on you, with search across your whole site.",
