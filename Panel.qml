@@ -2,6 +2,7 @@ import QtQuick
 import QtQuick.Controls
 import Quickshell.Io
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 import "Model.js" as Model
 
@@ -19,7 +20,7 @@ Panel {
   ipcTarget: "tmn73.jira"
   manageIpc: false
 
-  readonly property color foreground: bar ? bar.foreground : Color.foreground
+  readonly property color foreground: bar ? bar.foreground : Commons.Color.foreground
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
 
   property string highlightedKey: ""

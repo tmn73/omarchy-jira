@@ -40,6 +40,16 @@ for file in "$ROOT"/*.qml; do
   fi
 done
 
+# ---- The palette is always qualified
+#
+# Qt 6.12 adds a QtQuick Color type that shadows a bare Color, which leaves
+# every theme color undefined.
+
+for file in "$ROOT"/*.qml; do
+  name=$(basename "$file")
+  hasnt "$name" "(^|[^.[:alnum:]_])Color\." "$name uses a bare Color; Qt 6.12 shadows it, use Commons.Color"
+done
+
 # ---- Service exposes what the panel binds to
 #
 # These are the names Panel.qml reads. Renaming one without the other produces

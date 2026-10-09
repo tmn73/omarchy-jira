@@ -1,5 +1,6 @@
 import QtQuick
 import qs.Commons
+import qs.Commons as Commons
 
 // The active sprint: its name, how long is left, and one bar per measure.
 //
@@ -133,7 +134,7 @@ Column {
             radius: parent.radius
             color: barRow.isReference
               ? Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.3)
-              : Color.accent
+              : Commons.Color.accent
 
             Behavior on width {
               NumberAnimation { duration: 220; easing.type: Easing.OutCubic }
